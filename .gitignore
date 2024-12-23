@@ -1,0 +1,6 @@
+animations/
+experiments/
+sweeps/
+__pycache__
+hosts.txt
+secret.py
