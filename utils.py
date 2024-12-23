@@ -149,16 +149,30 @@ def animation_full(X: torch.Tensor, filename: str=None, interval: int=100, **kwa
     plt.close()
 
 
+def plot_exp(parent_dir: str, exp: str, list_n: list[int], logger, M: int, reverse=True, ema=False, remove_last_noise=True):
+    n_plots = len(list_n)
+    config_file = join(parent_dir, exp, "config.yaml")
+    fig, axs = plt.subplots(1, n_plots, figsize=(3*n_plots, 3))
+    for i, n in enumerate(list_n):
+        dsb = models.CachedDSB.from_config(config_file, logger)
+        dsb.load_model('beta', n, ema=ema)
+        X = dsb.generate_path('alpha', M=M, remove_last_noise=remove_last_noise).cpu()
+        plot_bridge(X, reverse=reverse, ax=axs[i], title=f"n={n}")
+    plt.suptitle(exp)
+    plt.show()
+
+
 def plot_sweep(sweep_dir: str, list_n: list[int], logger, M: int, reverse=True, ema=False, remove_last_noise=True):
     exps = [exp for exp in os.listdir(sweep_dir) if os.path.isdir(join(sweep_dir, exp))]
     n_plots = len(list_n)
     for exp in exps:
-        config_file = join(sweep_dir, exp, "config.yaml")
-        fig, axs = plt.subplots(1, n_plots, figsize=(3*n_plots, 3))
-        for i, n in enumerate(list_n):
-            dsb = models.CachedDSB.from_config(config_file, logger)
-            dsb.load_model('beta', n, ema=ema)
-            X = dsb.generate_path('alpha', M=M, remove_last_noise=remove_last_noise).cpu()
-            plot_bridge(X, reverse=reverse, ax=axs[i], title=f"n={n}")
-        plt.suptitle(exp)
-        plt.show()
+        plot_exp(sweep_dir, exp, list_n, logger, M, reverse=reverse, ema=ema, remove_last_noise=remove_last_noise)
+
+
+def plot_image(path: torch.Tensor):
+    n_plots = len(path)
+    fig, axs = plt.subplots(1, n_plots, figsize=(3*n_plots, 3))
+    for i in range(n_plots):
+        axs[i].imshow(path[i][0], cmap="gray")
+        axs[i].axis(False)
+    plt.show()

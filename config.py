@@ -10,6 +10,7 @@ def save_config(args, device):
             "name": args.name,
             "parent_dir": args.parent_dir,
             "host": args.host,
+            "dataset": args.dataset,
         },
         "pdata": {
             "n_samples": args.n_data_samples,
@@ -21,23 +22,29 @@ def save_config(args, device):
             "L": args.L,
             "N": args.N,
             "n_epoch": args.n_epoch,
-            "gamma": args.gamma,
+            "gamma0": args.gamma0,
+            "gamma_bar": args.gamma_bar,
             "cache_size": args.cache_size,
             "cache_period": args.cache_period,
+            "optimizer": "SGD" if args.use_sgd else "Adam",
             "lr": args.lr,
             "batch_size": args.batch_size,
+            "use_ema": args.use_ema
         }
     }
 
     # set pdata config
-    if args.data_tag:
-        config["pdata"]["type"] = "tag"
-        config["pdata"]["tag"] = args.data_tag
-    elif args.data_image:
-        config["pdata"]["type"] = "image"
-        config["pdata"]["image"] = args.data_image
+    if args.dataset == "mnist":
+        config["pdata"]["type"] = "MNIST"
     else:
-        raise ValueError(f'Unknown pdata type')      
+        if args.data_tag:
+            config["pdata"]["type"] = "tag"
+            config["pdata"]["tag"] = args.data_tag
+        elif args.data_image:
+            config["pdata"]["type"] = "image"
+            config["pdata"]["image"] = args.data_image
+        else:
+            raise ValueError(f'Unknown pdata type')      
 
     # set pprior config
     if args.prior_tag:

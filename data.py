@@ -6,6 +6,9 @@ from abc import ABC, abstractmethod
 from PIL import Image
 from os.path import join
 from torch.utils.data import Dataset
+import torchvision
+from torchvision import transforms
+from torch.utils.data import Dataset, DataLoader
 
 
 # Abstract base class
@@ -22,23 +25,22 @@ class DataSampler(ABC):
 
 # GaussianSampler class
 class GaussianSampler(DataSampler):
-    def __init__(self, mean: torch.Tensor, cov: torch.Tensor):
+    def __init__(self, mean: torch.Tensor, std: float):
         """
         Initialize a Gaussian sampler.
         
         Args:
             mean (torch.Tensor): Mean vector of the Gaussian distribution.
-            cov (torch.Tensor): Covariance matrix of the Gaussian distribution.
+            std: noise
         """
-        self.distribution = torch.distributions.MultivariateNormal(mean, covariance_matrix=cov)
         self.mean = mean
-        self.cov = cov
+        self.std = std
     
     def sample(self, n: int) -> torch.Tensor:
-        return self.distribution.sample((n,))
+        return self.mean + self.std * torch.rand((n, *self.mean.shape))
     
     def __str__(self):
-        return f"GaussianSampler(mean={self.mean}, cov={self.cov})"
+        return f"GaussianSampler(mean={self.mean}, std={self.std})"
 
 # TagSampler class
 class TagSampler(DataSampler):
@@ -61,20 +63,19 @@ class TagSampler(DataSampler):
         self.data = torch.tensor(pos, dtype=torch.float32)
         self.n_samples = self.data.shape[0]
         self.mean = self.data.mean(dim=0)
-        self.cov = self.data.T.cov()
+        self.std = self.data.std(dim=0)
     
     def sample(self, n: int) -> torch.Tensor:
         random_idx = torch.randint(0, self.n_samples, (n,))
         return self.data[random_idx]
     
     def __str__(self):
-        return f"TagSampler(tag={self.tag}), n_samples={self.n_samples} mean={self.mean}, cov={self.cov}"
+        return f"TagSampler(tag={self.tag}), n_samples={self.n_samples} mean={self.mean}, cov={self.std}"
     
 
 # ImageSampler class
 class ImageSampler(DataSampler):
     def __init__(self, filename: str, n_samples: int=None):
-
         self.filename = filename
         data = torch.tensor(make_img_2d_dataset(filename), dtype=torch.float32)
         if n_samples: # we subset the points to have N points (instead of the natural number of points from the image)
@@ -83,14 +84,14 @@ class ImageSampler(DataSampler):
         self.data = data
         self.n_samples = self.data.shape[0]
         self.mean = self.data.mean(dim=0)
-        self.cov = self.data.T.cov()
+        self.std = self.data.std(dim=0)
     
     def sample(self, n: int) -> torch.Tensor:
         random_idx = torch.randint(0, self.n_samples, (n,))
         return self.data[random_idx]
     
     def __str__(self):
-        return f"ImageSampler(filename={self.filename}), n_samples={self.n_samples} mean={self.mean}, cov={self.cov}"
+        return f"ImageSampler(filename={self.filename}), n_samples={self.n_samples} mean={self.mean}, std={self.std}"
 
 
 def make_img_2d_dataset(filename: str):
@@ -123,7 +124,43 @@ def config_to_p(pconfig: dict) -> DataSampler:
         p = TagSampler(tag=pconfig['tag'], n_samples=pconfig['n_samples'])
     elif pconfig["type"] == "image":
         p = ImageSampler(filename=pconfig['image'], n_samples=pconfig['n_samples'])
+    elif pconfig["type"] == "MNIST":
+        p = MNISTSampler()
     else:
         raise ValueError(f'Invalid p type. pconfig={pconfig}') 
-
     return p
+
+
+class MNISTSampler(DataSampler):
+    def __init__(self):
+        """
+        Initialize a sampler for MNIST.
+        """      
+        # Normalizer
+        transform = transforms.Compose([
+                transforms.ToTensor(),
+                # transforms.Normalize((0.1307,), (0.3081,))  # MNIST mean and std
+            ])
+        # Load MNIST dataset
+        mnist = torchvision.datasets.MNIST(
+            root="data/",
+            train=True,
+            transform=transform,
+            download=True
+        )
+        self.data = torch.cat([mnist[idx][0] for idx in range(len(mnist))], dim=0)[:,None,:,:] # add axis to have shape (60_000,1,28,28)
+        self.mean = self.data.mean(dim=0)
+        self.std = self.data.std()
+        self.n_samples = self.data.shape[0]
+
+    def sample(self, n: int) -> torch.Tensor:
+        """
+        Sample n random images from MNIST.
+        """
+        # Random sampling with replacement
+        random_idx = torch.randint(0, self.n_samples, (n,))
+        samples = self.data[random_idx]
+        return samples
+    
+    def __str__(self):
+        return f"MNISTSampler(n_data={self.n_samples})"

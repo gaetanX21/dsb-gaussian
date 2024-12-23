@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 from torchvision.ops import MLP
 import math
 from data import DataSampler
@@ -16,14 +16,14 @@ class CachedDSB(nn.Module):
     """
     Implements Cached Diffusion Schrödinger Bridge as proposed by De Bortoli et al. (cf. https://arxiv.org/abs/2106.01357)
     """
-    def __init__(self, dataset: str, name: str, host: str, parent_dir: str, device: torch.device, L: int, N: int, n_epoch: int, cache_size: int, cache_period: int,  lr: float, batch_size: int, gamma: float, model: nn.Module, pprior: DataSampler, pdata: DataSampler, logger: logging.Logger):
+    def __init__(self, dataset: str, name: str, host: str, parent_dir: str, device: torch.device, L: int, N: int, n_epoch: int, cache_size: int, cache_period: int,  lr: float, batch_size: int, gamma0: float, gamma_bar: float, model: nn.Module, pprior: DataSampler, pdata: DataSampler, logger: logging.Logger, use_ema: bool=False, use_sgd: bool=False):
         super().__init__()
 
         # set logger
         self.logger = logger
         self.logger.info("-"*42)
         self.logger.info("Initializing CachedDSB with the following parameters:")
-        self.logger.info(f"name={name}, parent_dir={parent_dir}, host={host}, device={device}, L={L}, N={N}, n_epoch={n_epoch} cache_size={cache_size}, cache_period={cache_period}, lr={lr}, batch_size={batch_size}, gamma={gamma}")
+        self.logger.info(f"name={name}, parent_dir={parent_dir}, host={host}, device={device}, L={L}, N={N}, n_epoch={n_epoch} cache_size={cache_size}, cache_period={cache_period}, lr={lr}, batch_size={batch_size}, gamma0={gamma0}, gamma_bar={gamma_bar}")
         n_model_params = sum(p.numel() for p in model(max_len=1).parameters())
         self.logger.info(f"model={model.__name__}, n_model_params={n_model_params}")
         self.logger.info(f"prior={pprior}, data={pdata}")
@@ -43,10 +43,12 @@ class CachedDSB(nn.Module):
         self.cache_period = cache_period
         self.lr = lr
         self.batch_size = batch_size
-        self.gamma = gamma
+        self.build_gamma(gamma0, gamma_bar)
         self.pprior = pprior
         self.pdata = pdata
         self.model = model
+        self.use_ema = use_ema
+        self.optim = SGD if use_sgd else Adam
 
         # instantiate f and b
         self.type_to_net = {"alpha": "f", "beta": "b"} # just for clarity
@@ -54,7 +56,8 @@ class CachedDSB(nn.Module):
             "f": model(init_zero=True, max_len=N+1).to(device), # forward network, parametrized by alpha
             "b": model(max_len=N+1).to(device) # backward network, parametrized by beta
         }
-        self.ema = EMA(self.nets["f"])
+        if self.use_ema:
+            self.ema = EMA(self.nets["f"])
         self.save_weights('alpha', 0) # initialize alpha_0 as 0 --> useless but ok
         self.optimizer = None # optimizer for training (used later)
         self.cache = None # cache for training (used later)
@@ -67,35 +70,48 @@ class CachedDSB(nn.Module):
         # build pdata & pprior
         pdata = data.config_to_p(config['pdata'])
         if config["pprior"]["type"] == "gaussian":
-            pdata_var = pdata.cov.diag().mean() # heuristic
-            pprior = data.GaussianSampler(mean=pdata.mean, cov=pdata_var*torch.eye(2)) # following paper's recommendations
+            pprior = data.GaussianSampler(mean=pdata.mean, std=pdata.std) # following paper's recommendations
         else:
             pprior = data.config_to_p(config["pprior"])
 
         # create CachedDSB instance
         model_config = config['model']
         instance = cls(
+            dataset = config["general"]["dataset"],
             device = torch.device(config["general"]["device"]),
             name = config["general"]["name"],
             host = host,
             parent_dir = config["general"]["parent_dir"],
             L = model_config["L"],
             N = model_config["N"],
-            n_epoch=model_config["n_epoch"],
-            gamma = model_config["gamma"],
+            n_epoch = model_config["n_epoch"],
+            gamma0 = model_config["gamma0"],
+            gamma_bar = model_config["gamma_bar"],
             cache_size = model_config["cache_size"],
             cache_period = model_config["cache_period"],
             lr = model_config["lr"],
             batch_size = model_config["batch_size"],
-            model = PositionalMLP2d,
+            model = PositionalMLP2d if config["general"]["dataset"] == "2d" else PositionalUNet,
             pprior = pprior,
             pdata = pdata,
-            logger = logger
+            logger = logger,
+            use_ema = config["model"]["use_ema"],
+            use_sgd = config["model"]["use_sgd"],
         )
 
         return instance
 
-    def load_model(self, type: str, n: int, ema: bool=True):
+    def build_gamma(self, gamma0: float, gamma_bar: float):
+        if self.dataset == '2d':
+            self.gamma = gamma0 * torch.ones((self.N+1,))
+        else:
+            k = torch.arange(0, self.N//2) # 0 to N//2 excluded
+            gamma_half = gamma0 + 2*k/self.N  * (gamma_bar - gamma0)
+            self.gamma = torch.cat([gamma_half, torch.Tensor([gamma_bar]), torch.flip(gamma_half, dims=[0])])
+        self.gamma = self.gamma.to(self.device)
+        self.logger.info(f"Using gamma {self.gamma} of length {len(self.gamma)} (should be {self.N+1})")
+
+    def load_model(self, type: str, n: int, ema: bool=False):
         """
         sets self.b = model(beta_n) if type=beta or self.f = model(alpha_n) if type=alpha        
         """
@@ -116,19 +132,19 @@ class CachedDSB(nn.Module):
         weights = self.nets[net].state_dict()
         filepath = join(self.parent_dir, self.name, "weights", f"{type}_{n}.pt")
         torch.save(weights, filepath)
-        # save EMA weights too
-        weights_ema = self.ema.state_dict()
-        filepath_ema = join(self.parent_dir, self.name, "weights_EMA", f"{type}_{n}.pt")
-        torch.save(weights_ema, filepath_ema)
+        # save EMA weights too, if any
+        if self.use_ema:
+            weights_ema = self.ema.state_dict()
+            filepath_ema = join(self.parent_dir, self.name, "weights_EMA", f"{type}_{n}.pt")
+            torch.save(weights_ema, filepath_ema)
         
     def set_optim(self, type: str) -> torch.optim:
         """
         Sets a new adam optimizer to train b (type=beta) or f (type=alpha)
         """
         net = self.type_to_net[type]
-        self.logger.debug(f"Getting optimizer for {net}")
-        optim = Adam(self.nets[net].parameters(), lr=self.lr)
-        self.optimizer = optim
+        self.logger.debug(f"Getting optimizer {self.optim} for {net}")
+        self.optimizer = self.optim(self.nets[net].parameters(), lr=self.lr)
     
     def set_ema(self, type: str) -> EMA:
         """
@@ -174,7 +190,8 @@ class CachedDSB(nn.Module):
         self.update_status(type, n)
         self.logger.debug(f"IPF step {type} {n}/{self.L}")
         self.set_optim(type) # warm-start since use previous weights BUT we DO reset the optim
-        self.set_ema(type) # EMA for network
+        if self.use_ema:
+            self.set_ema(type) # EMA for network
         for step in range(self.n_epoch):
             if step % self.cache_period == 0:
                 self.refresh_cache(type)
@@ -194,7 +211,8 @@ class CachedDSB(nn.Module):
         loss = self.compute_loss(type, k, Xk, Xkp)
         loss.backward()
         self.optimizer.step() # weights update
-        self.ema.update(self.nets[self.type_to_net[type]]) # weights_EMA update too!
+        if self.use_ema:
+            self.ema.update(self.nets[self.type_to_net[type]]) # weights_EMA update too!
 
     def compute_loss(self, type: str, k: torch.Tensor, Xk: torch.Tensor, Xkp: torch.Tensor) -> float:
         """
@@ -204,11 +222,11 @@ class CachedDSB(nn.Module):
         if type == 'beta':
             pred = b(Xkp,k+1)
             with torch.no_grad():
-                actual = (Xk-Xkp)/self.gamma + (f(Xk,k) - f(Xkp,k))
+                actual = (Xk-Xkp)/self.gamma[k].view(-1,1) + (f(Xk,k) - f(Xkp,k)) if self.dataset == "2d" else Xkp + (f(Xk,k)-f(Xkp,k))
         else:
             pred = f(Xk,k)
             with torch.no_grad():
-                actual = (Xkp-Xk)/self.gamma + (b(Xkp,k+1) - b(Xk,k+1))
+                actual = (Xkp-Xk)/self.gamma[k+1] + (b(Xkp,k+1) - b(Xk,k+1)) if self.dataset == "2d" else Xk + (f(Xkp,k+1)-f(Xk,k+1))
         loss = F.mse_loss(pred, actual)
         return loss
 
@@ -251,9 +269,14 @@ class CachedDSB(nn.Module):
         if remove_last_noise:
             Z[-1].zero_()
         ones = torch.ones(M, dtype=torch.int).to(self.device)
-        with torch.no_grad():
-            for k in range(self.N):
-                X[k+1] = X[k] + self.gamma*self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma) * Z[k] # drift-matching rather than mean-matching as our model does not have residual structure
+        if self.dataset == '2d':
+            with torch.no_grad():
+                for k in range(self.N):
+                    X[k+1] = X[k] + self.gamma[k]*self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k] # drift-matching for 2d dataset (because the underlying model does not have residual structure)
+        else:
+            with torch.no_grad():
+                for k in range(self.N):
+                    X[k+1] = self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k] # mean-matching for image datasets (the underlying  U-Net model does have a residual structure)
         return X
     
     def reverse_path(self, XN: torch.Tensor, remove_last_noise: bool=False) -> torch.Tensor:
@@ -269,9 +292,14 @@ class CachedDSB(nn.Module):
         if remove_last_noise:
             Z[0].zero_()
         ones = torch.ones(M, dtype=torch.int).to(self.device)
-        with torch.no_grad():
-            for k in range(self.N,0,-1):
-                X[k-1] = X[k] + self.gamma*self.nets["b"](X[k],k*ones) + math.sqrt(2*self.gamma) * Z[k-1] # drift-matching rather than mean-matching as our model does not have residual structure
+        if self.dataset == "2d":
+            with torch.no_grad():
+                for k in range(self.N,0,-1):
+                    X[k-1] = X[k] + self.gamma[k]*self.nets["b"](X[k],k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1] # drift-matching for 2d dataset
+        else:
+            with torch.no_grad():
+                for k in range(self.N,0,-1):
+                    X[k-1] = self.nets["b"](X[k],k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1] # mean-matching for image dataset
         return X
     
     def full_generation(self, M: int, remove_last_noise: bool=True) -> torch.Tensor:
@@ -303,7 +331,7 @@ class PositionalMLP2d(nn.Module):
     """
     Positional MLP for 2d input data, following the architecture proposed by De Bortoli et al. (cf. https://arxiv.org/abs/2106.01357)
     """
-    def __init__(self, max_len: int, init_zero: bool=False, d_model: int=64, logger: logging.Logger=None):
+    def __init__(self, max_len: int, d_model: int=64, init_zero: bool=False, logger: logging.Logger=None):
         super().__init__()
         self.logger = logger or logging.getLogger(__name__)
         self.logger.debug(f'PositionalMLP2d created with init_zero={init_zero} and d_model={d_model} and max_len={max_len}')
@@ -326,7 +354,7 @@ class PositionalMLP2d(nn.Module):
 
 
 class PositionalEmbedding(nn.Module):
-    def __init__(self, d_model: int, max_len: int):
+    def __init__(self, max_len: int, d_model: int):
         super().__init__()
         pe = build_pe(d_model=d_model, max_len=max_len)
         self.register_buffer('pe', pe) # to make sure it's non-trainable
@@ -345,9 +373,9 @@ class Dense(nn.Module):
     return self.dense(x)[...,None,None] # same as [:,:,None,None]
 
 
-class ScoreNet(nn.Module):
+class PositionalUNet(nn.Module):
   "Position-conditional U-Net to estimate the score network."""
-  def __init__(self, n_channels: int, channels: list[int]=[32,64,128,256], embed_dim: int=64, max_len: int=51):
+  def __init__(self, n_channels: int=1, channels: list[int]=[32,64,128,256], embed_dim: int=64, max_len: int=51, init_zero: bool=False):
     """Initialize a time-dependent score-based network.
     Args:
       channels: The number of channels for feature maps for each layer.
@@ -355,7 +383,9 @@ class ScoreNet(nn.Module):
     """
     super().__init__()
     # embed time
-    self.embed = nn.Sequential(PositionalEmbedding(d_model=embed_dim, max_len=max_len), nn.Linear(embed_dim, embed_dim))
+    pe = build_pe(d_model=embed_dim, max_len=max_len)
+    self.register_buffer('pe', pe) # to make sure it's non-trainable
+    self.lin_embed = nn.Linear(embed_dim, embed_dim)
     # encoder
     self.conv1 = nn.Conv2d(in_channels=n_channels, out_channels=channels[0], kernel_size=3, stride=1, bias=False)
     self.dense1 = Dense(embed_dim, channels[0])
@@ -383,9 +413,13 @@ class ScoreNet(nn.Module):
     # activation
     self.activation = lambda x: x*torch.sigmoid(x) # swish activation function
 
-  def forward(self, x, t):
+    if init_zero:
+        for param in self.parameters():
+            param.data.zero_()
+
+  def forward(self, x: torch.Tensor, t: torch.IntTensor):
     # embed time
-    embedding = self.activation(self.embed(t))
+    embedding = self.activation(self.lin_embed(self.pe[t]))
     # encoder
     h1 = self.activation( self.gnorm1( self.conv1(x)+self.dense1(embedding) ) )
     h2 = self.activation( self.gnorm2( self.conv2(h1)+self.dense2(embedding) ) )
