@@ -29,7 +29,6 @@ def get_args():
     parser.add_argument("--use_sgd", action="store_true", help="whether to use SGD instead of Adam (to reduce memory consumption) for training")
     parser.add_argument("--gradient_clip", action="store_true", help="whether to use gradient clipping during traning")
 
-
     group_pdata  = parser.add_mutually_exclusive_group(required=False)
     group_pdata.add_argument("--data_tag", help="specifies the 2d toy distribution (moon, circles) used for pdata")
     group_pdata.add_argument("--data_image", default='torch.webp', help="specifies the filename of the image used for pdata")

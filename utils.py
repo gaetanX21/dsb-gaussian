@@ -6,6 +6,7 @@ import torch
 import models
 import os
 from os.path import join
+import gc
 
 
 def plot_path_2d(path: np.ndarray, t: np.ndarray) -> None:

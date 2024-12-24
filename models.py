@@ -12,11 +12,12 @@ import data
 from os.path import join
 from ema import EMA
 
+
 class CachedDSB(nn.Module):
     """
     Implements Cached Diffusion Schrödinger Bridge as proposed by De Bortoli et al. (cf. https://arxiv.org/abs/2106.01357)
     """
-    def __init__(self, dataset: str, name: str, host: str, parent_dir: str, device: torch.device, L: int, N: int, n_epoch: int, cache_size: int, cache_period: int,  lr: float, batch_size: int, gamma0: float, gamma_bar: float, model: nn.Module, pprior: DataSampler, pdata: DataSampler, logger: logging.Logger, use_ema: bool=False, use_sgd: bool=False):
+    def __init__(self, dataset: str, name: str, host: str, parent_dir: str, device: torch.device, L: int, N: int, n_epoch: int, cache_size: int, cache_period: int,  lr: float, batch_size: int, gamma0: float, gamma_bar: float, model: nn.Module, data_shape: tuple[int], pprior: DataSampler, pdata: DataSampler, logger: logging.Logger, use_ema: bool=False, use_sgd: bool=False):
         super().__init__()
 
         # set logger
@@ -47,15 +48,18 @@ class CachedDSB(nn.Module):
         self.pprior = pprior
         self.pdata = pdata
         self.model = model
+        self.data_shape = data_shape
         self.use_ema = use_ema
         self.optim = SGD if use_sgd else Adam
 
         # instantiate f and b
         self.type_to_net = {"alpha": "f", "beta": "b"} # just for clarity
+        self.memory_summary("Before initializing f & b")
         self.nets = {
             "f": model(init_zero=True, max_len=N+1).to(device), # forward network, parametrized by alpha
             "b": model(max_len=N+1).to(device) # backward network, parametrized by beta
         }
+        self.memory_summary("After initializing f & b")
         if self.use_ema:
             self.ema = EMA(self.nets["f"])
         self.save_weights('alpha', 0) # initialize alpha_0 as 0 --> useless but ok
@@ -92,14 +96,17 @@ class CachedDSB(nn.Module):
             lr = model_config["lr"],
             batch_size = model_config["batch_size"],
             model = PositionalMLP2d if config["general"]["dataset"] == "2d" else PositionalUNet,
+            data_shape = (2,) if config["general"]["dataset"] == "2d" else (1,28,28),
             pprior = pprior,
             pdata = pdata,
             logger = logger,
             use_ema = config["model"]["use_ema"],
             use_sgd = config["model"]["use_sgd"],
         )
-
         return instance
+
+    def memory_summary(self, title: str):
+        self.logger.debug(f"[{title}] Memory Allocated: {torch.cuda.memory_allocated() / 1024**2:.0f} MiB | Memory Reserved: {torch.cuda.memory_reserved() / 1024**2:.0f} MiB")
 
     def build_gamma(self, gamma0: float, gamma_bar: float):
         if self.dataset == '2d':
@@ -143,9 +150,11 @@ class CachedDSB(nn.Module):
         Sets a new adam optimizer to train b (type=beta) or f (type=alpha)
         """
         net = self.type_to_net[type]
-        self.logger.debug(f"Getting optimizer {self.optim} for {net}")
+        self.logger.debug(f"Getting optimizer {self.optim.__name__} for {net}")
+        self.memory_summary("Before loading optimizer")
         self.optimizer = self.optim(self.nets[net].parameters(), lr=self.lr)
-    
+        self.memory_summary("After loading optimizer")
+
     def set_ema(self, type: str) -> EMA:
         """
         Sets a new EMA for the training of b (type=beta) or f (type=alpha)
@@ -154,6 +163,11 @@ class CachedDSB(nn.Module):
         self.logger.debug(f"Creating EMA for {net}")
         self.ema = EMA(self.nets[net])
 
+    def init_cache(self):
+        self.cache = torch.zeros((self.N+1, self.cache_size, *self.data_shape), device=self.device)
+        self.Z = torch.zeros((self.N, self.cache_size, *self.data_shape), device=self.device)
+        self.ones = torch.ones((self.cache_size,), dtype=torch.int, device=self.device)
+
     def train_model(self):
         """
         Trains the DSB network for L iterations.
@@ -161,6 +175,7 @@ class CachedDSB(nn.Module):
         self.t0 = time.time() # so that update_status can access t0 to display time elapsed
         self.logger.info(f'Training started for {self.L} IPF iterations')
         self.logger.debug(f'IPF iteration n=0')
+        self.init_cache()
         self.ipf_step('beta', 0) # for the first iteration we want alpha_0=0 so we do it apart
         self.nets["f"] = self.model(max_len=self.N+1).to(self.device) # now alpha_1 can be initialized to noise (we then train it!)
         # we need to do this separation otherwise a network with ReLU activations and weights=0 have gradients=0 and thus doesn't train!
@@ -182,7 +197,6 @@ class CachedDSB(nn.Module):
         with open(self.status_file, "w") as f:
             yaml.safe_dump(status, f)
 
-
     def ipf_step(self, type: str, n: int):
         """
         Performs 1 IPF step i.e. trains (half) the DSB network for level n i.e. solves a half-bridge.
@@ -193,6 +207,7 @@ class CachedDSB(nn.Module):
         if self.use_ema:
             self.set_ema(type) # EMA for network
         for step in range(self.n_epoch):
+            self.memory_summary(title=f"{type}_{n} step {step}/{self.n_epoch}")
             if step % self.cache_period == 0:
                 self.refresh_cache(type)
             k, Xk, Xkp = self.sample_cache()
@@ -201,7 +216,11 @@ class CachedDSB(nn.Module):
 
     def refresh_cache(self, type: str):
         self.logger.debug(f'Refreshing cache of type {type}')
-        self.cache = self.generate_path(type, M=self.cache_size)            
+        self.memory_summary("Before loading cache")
+        # self.cache = None
+        # torch.cuda.empty_cache()
+        self.generate_path(type, M=self.cache_size, cache_mode=True) # refresh cache
+        self.memory_summary("After loading cache")
 
     def gradient_step(self, type: str, k: torch.IntTensor, Xk: torch.Tensor, Xkp: torch.Tensor):
         """
@@ -226,7 +245,7 @@ class CachedDSB(nn.Module):
         else:
             pred = f(Xk,k)
             with torch.no_grad():
-                actual = (Xkp-Xk)/self.gamma[k+1] + (b(Xkp,k+1) - b(Xk,k+1)) if self.dataset == "2d" else Xk + (f(Xkp,k+1)-f(Xk,k+1))
+                actual = (Xkp-Xk)/self.gamma[k+1].view(-1,1) + (b(Xkp,k+1) - b(Xk,k+1)) if self.dataset == "2d" else Xk + (f(Xkp,k+1)-f(Xk,k+1))
         loss = F.mse_loss(pred, actual)
         return loss
 
@@ -240,7 +259,7 @@ class CachedDSB(nn.Module):
         Xkp = self.cache[k+1,j,:] # all the X_{k(j)+1}^j
         return k, Xk, Xkp
     
-    def generate_path(self, type: str, M: int=None, X_init: torch.Tensor=None, remove_last_noise: bool=False) -> torch.Tensor:
+    def generate_path(self, type: str, M: int=None, X_init: torch.Tensor=None, remove_last_noise: bool=False, cache_mode: bool=True) -> torch.Tensor:
         """
         Generates M forward/reverse paths based on type.
         - beta generates forward paths (using f!)
@@ -249,26 +268,25 @@ class CachedDSB(nn.Module):
         if ((X_init is None) and (M is None)) or ((X_init is not None) and (M is not None)):
             raise ValueError("You must specify exactly one of M (number of points) or X_init (initial positions).")
         if X_init is None:
+            # X_init = self.pprior.sample(M) if type=="alpha" else self.pdata.sample(M)
             X_init = self.pprior.sample(M) if type=="alpha" else self.pdata.sample(M)
-        else:
-            M = X_init.shape[0]
-
-        X = self.reverse_path(X_init, remove_last_noise) if type=="alpha" else self.forward_path(X_init, remove_last_noise)
+        X = self.reverse_path(X_init, remove_last_noise, cache_mode) if type=="alpha" else self.forward_path(X_init, remove_last_noise, cache_mode)
         return X
 
-    def forward_path(self, X0: torch.Tensor, remove_last_noise: bool=False) -> torch.Tensor:
+    def forward_path(self, X0: torch.Tensor, remove_last_noise: bool=False, cache_mode: bool=True) -> torch.Tensor:
         """
         Uses current self.f !
         Takes tensor X0 of dim (M,d) of initial positions and samples the corresponding paths P^i starting from X0^i such that P is of shape (N+1,M,d)
         """
-        X = torch.zeros(self.N+1, *X0.shape) # shape (N+1,M,d)
+        print(f'cache mode= {cache_mode}')
+        X = self.cache if cache_mode else torch.zeros(self.N+1, *X0.shape, device=self.device) # shape (N+1,M,d)
         M = X0.shape[0]
         X[0] = X0
-        X = X.to(self.device)
-        Z = torch.randn(self.N, *X0.shape).to(self.device) # shape (N,M,d)
+        if cache_mode: self.Z.normal_() # in-place!
+        Z = self.Z if cache_mode else torch.randn(self.N, *X0.shape, device=self.device) # shape (N,M,d)
         if remove_last_noise:
             Z[-1].zero_()
-        ones = torch.ones(M, dtype=torch.int).to(self.device)
+        ones = self.ones if cache_mode else torch.ones(M, dtype=torch.int, device=self.device)
         if self.dataset == '2d':
             with torch.no_grad():
                 for k in range(self.N):
@@ -277,21 +295,22 @@ class CachedDSB(nn.Module):
             with torch.no_grad():
                 for k in range(self.N):
                     X[k+1] = self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k] # mean-matching for image datasets (the underlying  U-Net model does have a residual structure)
+        self.memory_summary("after loop")
         return X
     
-    def reverse_path(self, XN: torch.Tensor, remove_last_noise: bool=False) -> torch.Tensor:
+    def reverse_path(self, XN: torch.Tensor, remove_last_noise: bool=False, cache_mode: bool=True) -> torch.Tensor:
         """
         Uses current self.b !
         Takes tensor XN of dim (M,d) of final positions and samples the corresponding paths P^i starting from XN^i such that P is of shape (N+1,M,d)
         """
-        X = torch.zeros(self.N+1, *XN.shape) # shape (N+1,M,d)
+        X = self.cache if cache_mode else torch.zeros(self.N+1, *XN.shape, device=self.device) # shape (N+1,M,d)
         M = XN.shape[0]
         X[-1] = XN
-        X = X.to(self.device)
-        Z = torch.randn(self.N, *XN.shape).to(self.device) # shape (N,M,d)
+        if cache_mode: self.Z.normal_() # in-place!
+        Z = self.Z if cache_mode else torch.randn(self.N, *XN.shape, device=self.device) # shape (N,M,d)
         if remove_last_noise:
             Z[0].zero_()
-        ones = torch.ones(M, dtype=torch.int).to(self.device)
+        ones = self.ones if cache_mode else torch.ones(M, dtype=torch.int, device=self.device)
         if self.dataset == "2d":
             with torch.no_grad():
                 for k in range(self.N,0,-1):

@@ -29,7 +29,9 @@ def save_config(args, device):
             "optimizer": "SGD" if args.use_sgd else "Adam",
             "lr": args.lr,
             "batch_size": args.batch_size,
-            "use_ema": args.use_ema
+            "use_ema": args.use_ema,
+            "use_sgd": args.use_sgd,
+            "gradient_clip": args.gradient_clip,
         }
     }
 
