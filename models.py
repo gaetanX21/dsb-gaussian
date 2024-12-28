@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.optim import Adam, SGD
 from torchvision.ops import MLP
 import math
@@ -23,8 +22,8 @@ class CachedDSB(nn.Module):
         # set logger
         self.logger = logger
         self.logger.info("-"*42)
-        self.logger.info("Initializing CachedDSB with the following parameters:")
-        self.logger.info(f"name={name}, parent_dir={parent_dir}, host={host}, device={device}, L={L}, N={N}, n_epoch={n_epoch} cache_size={cache_size}, cache_period={cache_period}, lr={lr}, batch_size={batch_size}, gamma0={gamma0}, gamma_bar={gamma_bar}")
+        self.logger.info("Initializing CachedDSB *IMAGE-ONLY* with the following parameters:")
+        self.logger.info(f"name={name}, parent_dir={parent_dir}, host={host}, device={device}, L={L}, N={N}, n_epoch={n_epoch} cache_size={cache_size}, cache_period={cache_period}, lr={lr}, batch_size={batch_size}, gamma0={gamma0}, gamma_bar={gamma_bar}, data_shape={data_shape}")
         n_model_params = sum(p.numel() for p in model(max_len=1).parameters())
         self.logger.info(f"model={model.__name__}, n_model_params={n_model_params}")
         self.logger.info(f"prior={pprior}, data={pdata}")
@@ -44,7 +43,7 @@ class CachedDSB(nn.Module):
         self.cache_period = cache_period
         self.lr = lr
         self.batch_size = batch_size
-        self.build_gamma(gamma0, gamma_bar)
+        self.init_gamma(gamma0, gamma_bar)
         self.pprior = pprior
         self.pdata = pdata
         self.model = model
@@ -53,13 +52,7 @@ class CachedDSB(nn.Module):
         self.optim = SGD if use_sgd else Adam
 
         # instantiate f and b
-        self.type_to_net = {"alpha": "f", "beta": "b"} # just for clarity
-        self.memory_summary("Before initializing f & b")
-        self.nets = {
-            "f": model(init_zero=True, max_len=N+1).to(device), # forward network, parametrized by alpha
-            "b": model(max_len=N+1).to(device) # backward network, parametrized by beta
-        }
-        self.memory_summary("After initializing f & b")
+        self.init_networks()
         if self.use_ema:
             self.ema = EMA(self.nets["f"])
         self.save_weights('alpha', 0) # initialize alpha_0 as 0 --> useless but ok
@@ -95,7 +88,7 @@ class CachedDSB(nn.Module):
             cache_period = model_config["cache_period"],
             lr = model_config["lr"],
             batch_size = model_config["batch_size"],
-            model = PositionalMLP2d if config["general"]["dataset"] == "2d" else PositionalUNet,
+            model = PositionalUNet,
             data_shape = (2,) if config["general"]["dataset"] == "2d" else (1,28,28),
             pprior = pprior,
             pdata = pdata,
@@ -105,19 +98,44 @@ class CachedDSB(nn.Module):
         )
         return instance
 
-    def memory_summary(self, title: str):
-        self.logger.debug(f"[{title}] Memory Allocated: {torch.cuda.memory_allocated() / 1024**2:.0f} MiB | Memory Reserved: {torch.cuda.memory_reserved() / 1024**2:.0f} MiB")
+    def track_memory(func):
+        """
+        Logs Memory (Allocated & Reserved) before and after calling a function.
+        """
+        def wrapper(self, *args, **kwargs):
+            mem_alloc_before = int(torch.cuda.memory_allocated() / 1024**2) # MiB
+            mem_res_before = int(torch.cuda.memory_reserved() / 1024**2) # MiB
+            output = func(self, *args, **kwargs)
+            mem_alloc_after = int(torch.cuda.memory_allocated() / 1024**2) # MiB
+            mem_res_before = int(torch.cuda.memory_reserved() / 1024**2) # MiB
 
-    def build_gamma(self, gamma0: float, gamma_bar: float):
-        if self.dataset == '2d':
-            self.gamma = gamma0 * torch.ones((self.N+1,))
-        else:
-            k = torch.arange(0, self.N//2) # 0 to N//2 excluded
-            gamma_half = gamma0 + 2*k/self.N  * (gamma_bar - gamma0)
-            self.gamma = torch.cat([gamma_half, torch.Tensor([gamma_bar]), torch.flip(gamma_half, dims=[0])])
-        self.gamma = self.gamma.to(self.device)
-        self.logger.info(f"Using gamma {self.gamma} of length {len(self.gamma)} (should be {self.N+1})")
+            self.logger.debug(f'[{func.__name__}] Mem. Alloc. {mem_alloc_before} -> {mem_alloc_after} MiB | Mem. Res. {mem_res_before} -> {mem_alloc_after} MiB.')
+            return output
+        return wrapper
 
+    @track_memory
+    def init_networks(self):
+        """
+        Initialize forward network F_alpha and reverse network B_beta.
+        """
+        self.nets = {
+            "F": self.model(init_zero=True, max_len=self.N+1).to(self.device), # forward network, parametrized by alpha
+            "B": self.model(max_len=self.N+1).to(self.device) # reverse network, parametrized by beta
+        }
+        self.type_to_net = {
+            "alpha": "F",
+            "beta": "B"
+        }
+
+    @track_memory
+    def init_gamma(self, gamma0: float, gamma_bar: float):
+        self.gamma = torch.zeros((self.N+1), device=self.device)
+        k = torch.arange(0, self.N//2) # 0 to N//2 (excluded)
+        self.gamma[:self.N//2] = gamma0 + 2*k/self.N  * (gamma_bar - gamma0)
+        self.gamma[self.N//2] = gamma_bar
+        self.gamma[self.N//2+1:] = torch.flip(self.gamma[:self.N//2], dims=[0])
+
+    @track_memory
     def load_model(self, type: str, n: int, ema: bool=False):
         """
         sets self.b = model(beta_n) if type=beta or self.f = model(alpha_n) if type=alpha        
@@ -128,14 +146,15 @@ class CachedDSB(nn.Module):
         weights = torch.load(filepath, weights_only=True)
         self.nets[net].load_state_dict(weights)
 
+    @track_memory
     def save_weights(self, type: str, n: int):
         """
         if type=beta saves beta_n=self.b.state_dict() as .pt file
         if type=alpha saves alpha_n=self.f.state_dict() as .pt file
         """
-        net = self.type_to_net[type]
         self.logger.debug(f"Saving {type}_{n}")
         # save weights
+        net = self.type_to_net[type]
         weights = self.nets[net].state_dict()
         filepath = join(self.parent_dir, self.name, "weights", f"{type}_{n}.pt")
         torch.save(weights, filepath)
@@ -144,17 +163,17 @@ class CachedDSB(nn.Module):
             weights_ema = self.ema.state_dict()
             filepath_ema = join(self.parent_dir, self.name, "weights_EMA", f"{type}_{n}.pt")
             torch.save(weights_ema, filepath_ema)
-        
+
+    @track_memory 
     def set_optim(self, type: str) -> torch.optim:
         """
         Sets a new adam optimizer to train b (type=beta) or f (type=alpha)
         """
         net = self.type_to_net[type]
         self.logger.debug(f"Getting optimizer {self.optim.__name__} for {net}")
-        self.memory_summary("Before loading optimizer")
         self.optimizer = self.optim(self.nets[net].parameters(), lr=self.lr)
-        self.memory_summary("After loading optimizer")
 
+    @track_memory
     def set_ema(self, type: str) -> EMA:
         """
         Sets a new EMA for the training of b (type=beta) or f (type=alpha)
@@ -163,12 +182,15 @@ class CachedDSB(nn.Module):
         self.logger.debug(f"Creating EMA for {net}")
         self.ema = EMA(self.nets[net])
 
+    @track_memory
     def init_cache(self):
-        self.memory_summary(f"Initializing cache")
         self.cache = torch.zeros((self.N+1, self.cache_size, *self.data_shape), device=self.device)
         self.Z = torch.zeros((self.N, self.cache_size, *self.data_shape), device=self.device)
         self.ones = torch.ones((self.cache_size,), dtype=torch.int, device=self.device)
-        self.memory_summary(f"After cache init")
+
+    @track_memory
+    def init_loss(self):
+        self.actual = torch.zeros((self.batch_size, *self.data_shape), device=self.device)
 
     def train_model(self):
         """
@@ -178,8 +200,9 @@ class CachedDSB(nn.Module):
         self.logger.info(f'Training started for {self.L} IPF iterations')
         self.logger.debug(f'IPF iteration n=0')
         self.init_cache()
+        self.init_loss()
         self.ipf_step('beta', 0) # for the first iteration we want alpha_0=0 so we do it apart
-        self.nets["f"] = self.model(max_len=self.N+1).to(self.device) # now alpha_1 can be initialized to noise (we then train it!)
+        self.nets["F"] = self.model(max_len=self.N+1).to(self.device) # now alpha_1 can be initialized to noise (we then train it!)
         # we need to do this separation otherwise a network with ReLU activations and weights=0 have gradients=0 and thus doesn't train!
         for n in range(1, self.L):
             self.logger.info(f'IPF iteration n={n}')
@@ -190,6 +213,9 @@ class CachedDSB(nn.Module):
         self.logger.info(f'Training finished in {dt//60}h{dt%60:02d}min')
 
     def update_status(self, type: str, n: int):
+        """
+        Write current status (training or completed) in status.yaml file.
+        """
         status = {
             "host": self.host,
             "ipf_step": f"{type} {n}/{self.L}" if n<self.L else "-",
@@ -201,7 +227,7 @@ class CachedDSB(nn.Module):
 
     def ipf_step(self, type: str, n: int):
         """
-        Performs 1 IPF step i.e. trains (half) the DSB network for level n i.e. solves a half-bridge.
+        Performs one IPF step i.e. trains (half) the DSB network for level n i.e. solves a half-bridge.
         """
         self.update_status(type, n)
         self.logger.debug(f"IPF step {type} {n}/{self.L}")
@@ -209,58 +235,70 @@ class CachedDSB(nn.Module):
         if self.use_ema:
             self.set_ema(type) # EMA for network
         for step in range(self.n_epoch):
-            self.memory_summary(title=f"{type}_{n} step {step}/{self.n_epoch}")
             if step % self.cache_period == 0:
                 self.refresh_cache(type)
+                self.refresh_cuda_cache() # to clear all the Memory Reservd unnecessarily created by Torch because we created a bunch of intermediary tensors by calling f/b so many times...
             k, Xk, Xkp = self.sample_cache()
             self.gradient_step(type, k, Xk, Xkp)
         self.save_weights(type, n)
 
+    @track_memory
     def refresh_cache(self, type: str):
         """
-        type beta = we generate forward paths using f
-        type alpha = we generate reverse paths using b
+        Refreshes the cache i.e. creates cache_size paths.
+        - type beta = we generate forward paths using f
+        - type alpha = we generate reverse paths using b
         """
         self.logger.debug(f'Refreshing cache of type {type}')
-        self.memory_summary("Before refreshing cache")
         X, Z, ones = self.cache, self.Z, self.ones # for naming simplicity
         Z.normal_() # refresh Z with N(0,1) values!
-        if type=="beta":
-            X[0] = self.pdata.sample(self.cache_size)
-            if self.dataset == "2d": # use drift-matching because underlying model doesn't have residual connections
-                with torch.no_grad():
-                    for k in range(self.N):
-                        X[k+1] = X[k] + self.gamma[k]*self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k]
-            else: # use mean-matching (because underlying U-Net does have residual connections)
-                with torch.no_grad():
-                    for k in range(self.N):
-                        X[k+1] = self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k]
-        else:
-            X[-1] = self.pprior.sample(self.cache_size)
-            if self.dataset == "2d":
-                with torch.no_grad():
-                    for k in range(self.N, 0, -1):
-                        X[k-1] = X[k] + self.gamma[k]*self.nets["b"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1]
+        self.generate_path_(type, X, Z, ones)
+    
+    def generate_path(self, type: str, M: int, remove_last_noise: bool=False):
+        """
+        Creates M paths AFTER TRAINING.
+        - type beta = we generate forward paths using f
+        - type alpha = we generate reverse paths using b
+        """
+        X = torch.zeros((self.N+1, M, *self.data_shape), device=self.device)
+        Z = torch.randn((self.N, M, *self.data_shape), device=self.device)
+        if remove_last_noise:
+            if type == "beta":
+                Z[-1].zero_()
             else:
-                with torch.no_grad():
-                    for k in range(self.N, 0, -1):
-                        X[k-1] = self.nets["b"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1]
-        # self.generate_path(type, M=self.cache_size, cache_mode=True) # refresh cache
-        self.memory_summary("After refreshing cache")
+                Z[0].zero_()
+        ones = torch.ones((M,), dtype=torch.int, device=self.device)
+        self.generate_path_(type, X, Z, ones)
+        return X
+        
+    def generate_path_(self, type: str, X: torch.tensor, Z: torch.tensor, ones: torch.IntTensor):
+        """
+        Given empty tensor X and noise Z and "ones", creates the corresponding path by modifying the tensors in-place.
+        """
+        M = X.shape[1] # number of paths generated
+        if type == "beta":
+            X[0].copy_(self.pdata.sample(M))
+            with torch.no_grad():
+                for k in range(self.N):
+                    X[k+1].copy_(self.nets["F"](X[k], k*ones) + math.sqrt(2*self.gamma[k+1]) * Z[k])
+        else:
+            X[-1].copy_(self.pprior.sample(M))
+            with torch.no_grad():
+                for k in range(self.N, 0, -1):
+                    X[k-1].copy_(self.nets["B"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1])
+
+    @track_memory
+    def refresh_cuda_cache(self):
         torch.cuda.empty_cache()
-        self.memory_summary("After calling torch.cuda.empty_cache() cache")
 
     def gradient_step(self, type: str, k: torch.IntTensor, Xk: torch.Tensor, Xkp: torch.Tensor):
         """
         Performs a gradient step on the model for type (alpha or beta) on the selected points X_{k(j)}^j using the optimizer and batch_size.
         """
         self.optimizer.zero_grad()
-        self.memory_summary("before compute loss")
         loss = self.compute_loss(type, k, Xk, Xkp)
-        self.memory_summary("after compute loss")
         loss.backward()
         self.optimizer.step() # weights update --> frees a lot of Memory Allocated since the gradients can be thrown away
-        self.memory_summary("after optim.step()")
         if self.use_ema:
             self.ema.update(self.nets[self.type_to_net[type]]) # weights_EMA update too!
 
@@ -268,24 +306,16 @@ class CachedDSB(nn.Module):
         """
         Computes the loss for the model for type (alpha or beta) using the cache of size cache_size.
         """
-        b, f = self.nets["b"], self.nets["f"] # for clarity
+        B, F = self.nets["B"], self.nets["F"] # for clarity
         if type == 'beta':
-            pred = b(Xkp,k+1)
-            if self.dataset == "2d":
-                with torch.no_grad():
-                    actual = (Xk-Xkp)/self.gamma[k].view(-1,1) + (f(Xk,k) - f(Xkp,k))
-            else:
-                with torch.no_grad():
-                    actual = Xkp + (f(Xk,k)-f(Xkp,k))
+            pred = B(Xkp, k+1)
+            with torch.no_grad():
+                self.actual.copy_(Xkp + (F(Xk, k) - F(Xkp, k))) # using equation (12)
         else:
-            pred = f(Xk,k)
-            if self.dataset == "2d":
-                with torch.no_grad():
-                    actual = (Xkp-Xk)/self.gamma[k+1].view(-1,1) + (b(Xkp,k+1) - b(Xk,k+1))
-            else:
-                with torch.no_grad():
-                    actual = Xk + (f(Xkp,k+1)-f(Xk,k+1))
-        loss = F.mse_loss(pred, actual)
+            pred = F(Xk, k)
+            with torch.no_grad():
+                self.actual.copy_(Xk + (B(Xkp, k+1) - B(Xk, k+1))) # using equation (13)
+        loss = nn.functional.mse_loss(pred, self.actual)
         return loss
 
     def sample_cache(self) -> tuple[torch.Tensor]:
@@ -294,84 +324,14 @@ class CachedDSB(nn.Module):
         """
         k = torch.randint(0, self.N, (self.batch_size,)) # "batch_size" samples from U({0,...,N-1})
         j = torch.randint(0, self.cache_size, (self.batch_size,)) # "batch_size" sampels from U({0,...,cache_size-1})
-        Xk = self.cache[k,j,:] # all the X_{k(j)}^j
-        Xkp = self.cache[k+1,j,:] # all the X_{k(j)+1}^j
+        Xk = self.cache[k, j, :] # all the X_{k(j)}^j
+        Xkp = self.cache[k+1, j, :] # all the X_{k(j)+1}^j
         return k, Xk, Xkp
-    
-    # def generate_path(self, type: str, M: int=None, X_init: torch.Tensor=None, remove_last_noise: bool=False, cache_mode: bool=True) -> torch.Tensor:
-    #     """
-    #     Generates M forward/reverse paths based on type.
-    #     - beta generates forward paths (using f!)
-    #     - alpha generates reverse paths (using b!)
-    #     """
-    #     if ((X_init is None) and (M is None)) or ((X_init is not None) and (M is not None)):
-    #         raise ValueError("You must specify exactly one of M (number of points) or X_init (initial positions).")
-    #     if X_init is None:
-    #         # X_init = self.pprior.sample(M) if type=="alpha" else self.pdata.sample(M)
-    #         X_init = self.pprior.sample(M) if type=="alpha" else self.pdata.sample(M)
-    #     X = self.reverse_path(X_init, remove_last_noise, cache_mode) if type=="alpha" else self.forward_path(X_init, remove_last_noise, cache_mode)
-    #     return X
-
-    # def forward_path(self, X0: torch.Tensor, remove_last_noise: bool=False, cache_mode: bool=True) -> torch.Tensor:
-    #     """
-    #     Uses current self.f !
-    #     Takes tensor X0 of dim (M,d) of initial positions and samples the corresponding paths P^i starting from X0^i such that P is of shape (N+1,M,d)
-    #     """
-    #     X = self.cache if cache_mode else torch.zeros(self.N+1, *X0.shape, device=self.device) # shape (N+1,M,d)
-    #     M = X0.shape[0]
-    #     X[0] = X0
-    #     if cache_mode: self.Z.normal_() # in-place!
-    #     Z = self.Z if cache_mode else torch.randn(self.N, *X0.shape, device=self.device) # shape (N,M,d)
-    #     if remove_last_noise:
-    #         Z[-1].zero_()
-    #     ones = self.ones if cache_mode else torch.ones(M, dtype=torch.int, device=self.device)
-    #     if self.dataset == '2d':
-    #         with torch.no_grad():
-    #             for k in range(self.N):
-    #                 # use X[k+1].copy_() for in-place modif?
-    #                 X[k+1] = X[k] + self.gamma[k]*self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k] # drift-matching for 2d dataset (because the underlying model does not have residual structure)
-    #     else:
-    #         with torch.no_grad():
-    #             for k in range(self.N):
-    #                 X[k+1] = self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k] # mean-matching for image datasets (the underlying  U-Net model does have a residual structure)
-    #     return X
-    
-    # def reverse_path(self, XN: torch.Tensor, remove_last_noise: bool=False, cache_mode: bool=True) -> torch.Tensor:
-    #     """
-    #     Uses current self.b !
-    #     Takes tensor XN of dim (M,d) of final positions and samples the corresponding paths P^i starting from XN^i such that P is of shape (N+1,M,d)
-    #     """
-    #     X = self.cache if cache_mode else torch.zeros(self.N+1, *XN.shape, device=self.device) # shape (N+1,M,d)
-    #     M = XN.shape[0]
-    #     X[-1] = XN
-    #     if cache_mode: self.Z.normal_() # in-place!
-    #     Z = self.Z if cache_mode else torch.randn(self.N, *XN.shape, device=self.device) # shape (N,M,d)
-    #     if remove_last_noise:
-    #         Z[0].zero_()
-    #     ones = self.ones if cache_mode else torch.ones(M, dtype=torch.int, device=self.device)
-    #     if self.dataset == "2d":
-    #         with torch.no_grad():
-    #             for k in range(self.N,0,-1):
-    #                 X[k-1] = X[k] + self.gamma[k]*self.nets["b"](X[k],k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1] # drift-matching for 2d dataset
-    #     else:
-    #         with torch.no_grad():
-    #             for k in range(self.N,0,-1):
-    #                 X[k-1] = self.nets["b"](X[k],k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1] # mean-matching for image dataset
-    #     return X
-    
-    # def full_generation(self, M: int, remove_last_noise: bool=True) -> torch.Tensor:
-    #     X_init = self.pprior.sample(M) # initial noise
-    #     X = torch.zeros((2*self.L, self.N+1, *X_init.shape))
-    #     for n in range(self.L):
-    #         self.load_model("alpha", n)
-    #         X_forward = self.generate_path("beta", X_init=X[2*n-1,0], remove_last_noise=remove_last_noise) if n>0 else self.generate_path("beta", X_init=X_init, remove_last_noise=remove_last_noise)
-    #         X[2*n] = X_forward
-    #         self.load_model("beta", n)
-    #         X_backward = self.generate_path("alpha", X_init=X[2*n][-1], remove_last_noise=remove_last_noise)
-    #         X[2*n+1] = X_backward
-    #     return X
 
 
+######################################################################
+# networks used for prediction
+######################################################################
 def build_pe(d_model: int, max_len: int) -> torch.Tensor:
     """
     Builds positional encodings PositionalMLP2d.
@@ -384,32 +344,6 @@ def build_pe(d_model: int, max_len: int) -> torch.Tensor:
     return pe
 
 
-class PositionalMLP2d(nn.Module):
-    """
-    Positional MLP for 2d input data, following the architecture proposed by De Bortoli et al. (cf. https://arxiv.org/abs/2106.01357)
-    """
-    def __init__(self, max_len: int, d_model: int=64, init_zero: bool=False, logger: logging.Logger=None):
-        super().__init__()
-        self.logger = logger or logging.getLogger(__name__)
-        self.logger.debug(f'PositionalMLP2d created with init_zero={init_zero} and d_model={d_model} and max_len={max_len}')
-        pe = build_pe(d_model=d_model, max_len=max_len)
-        self.register_buffer('pe', pe) # to make sure it's non-trainable
-        self.mlp_1a = MLP(in_channels=2, hidden_channels=[16, 32])
-        self.mlp_1b = MLP(in_channels=d_model, hidden_channels=[16, 32])
-        self.mlp_2 = MLP(in_channels=64, hidden_channels=[128, 128, 2])
-        if init_zero:
-            for param in self.parameters():
-                param.data.zero_()
-
-    def forward(self, x: torch.Tensor, k: torch.IntTensor) -> torch.Tensor:
-        with torch.autograd.set_detect_anomaly(True):
-            hx = self.mlp_1a(x)
-            hk = self.mlp_1b(self.pe[k])
-            h = torch.cat([hx,hk], dim=-1)
-            out = self.mlp_2(h)
-            return out
-
-
 class PositionalEmbedding(nn.Module):
     def __init__(self, max_len: int, d_model: int):
         super().__init__()
@@ -419,8 +353,7 @@ class PositionalEmbedding(nn.Module):
     def forward(self, x: torch.IntTensor) -> torch.Tensor:
         return self.pe[x]
 
-#######################################""
-# U-Net code (from PGM project)
+
 class Dense(nn.Module):
   """Fully connected layer + reshape outputs to feature maps (i.e. with width and height of 1 each)."""
   def __init__(self, input_dim, output_dim):
