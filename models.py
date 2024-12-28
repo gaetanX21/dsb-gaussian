@@ -164,9 +164,11 @@ class CachedDSB(nn.Module):
         self.ema = EMA(self.nets[net])
 
     def init_cache(self):
+        self.memory_summary(f"Initializing cache")
         self.cache = torch.zeros((self.N+1, self.cache_size, *self.data_shape), device=self.device)
         self.Z = torch.zeros((self.N, self.cache_size, *self.data_shape), device=self.device)
         self.ones = torch.ones((self.cache_size,), dtype=torch.int, device=self.device)
+        self.memory_summary(f"After cache init")
 
     def train_model(self):
         """
@@ -215,21 +217,50 @@ class CachedDSB(nn.Module):
         self.save_weights(type, n)
 
     def refresh_cache(self, type: str):
+        """
+        type beta = we generate forward paths using f
+        type alpha = we generate reverse paths using b
+        """
         self.logger.debug(f'Refreshing cache of type {type}')
-        self.memory_summary("Before loading cache")
-        # self.cache = None
-        # torch.cuda.empty_cache()
-        self.generate_path(type, M=self.cache_size, cache_mode=True) # refresh cache
-        self.memory_summary("After loading cache")
+        self.memory_summary("Before refreshing cache")
+        X, Z, ones = self.cache, self.Z, self.ones # for naming simplicity
+        Z.normal_() # refresh Z with N(0,1) values!
+        if type=="beta":
+            X[0] = self.pdata.sample(self.cache_size)
+            if self.dataset == "2d": # use drift-matching because underlying model doesn't have residual connections
+                with torch.no_grad():
+                    for k in range(self.N):
+                        X[k+1] = X[k] + self.gamma[k]*self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k]
+            else: # use mean-matching (because underlying U-Net does have residual connections)
+                with torch.no_grad():
+                    for k in range(self.N):
+                        X[k+1] = self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k]
+        else:
+            X[-1] = self.pprior.sample(self.cache_size)
+            if self.dataset == "2d":
+                with torch.no_grad():
+                    for k in range(self.N, 0, -1):
+                        X[k-1] = X[k] + self.gamma[k]*self.nets["b"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1]
+            else:
+                with torch.no_grad():
+                    for k in range(self.N, 0, -1):
+                        X[k-1] = self.nets["b"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1]
+        # self.generate_path(type, M=self.cache_size, cache_mode=True) # refresh cache
+        self.memory_summary("After refreshing cache")
+        torch.cuda.empty_cache()
+        self.memory_summary("After calling torch.cuda.empty_cache() cache")
 
     def gradient_step(self, type: str, k: torch.IntTensor, Xk: torch.Tensor, Xkp: torch.Tensor):
         """
         Performs a gradient step on the model for type (alpha or beta) on the selected points X_{k(j)}^j using the optimizer and batch_size.
         """
         self.optimizer.zero_grad()
+        self.memory_summary("before compute loss")
         loss = self.compute_loss(type, k, Xk, Xkp)
+        self.memory_summary("after compute loss")
         loss.backward()
-        self.optimizer.step() # weights update
+        self.optimizer.step() # weights update --> frees a lot of Memory Allocated since the gradients can be thrown away
+        self.memory_summary("after optim.step()")
         if self.use_ema:
             self.ema.update(self.nets[self.type_to_net[type]]) # weights_EMA update too!
 
@@ -240,12 +271,20 @@ class CachedDSB(nn.Module):
         b, f = self.nets["b"], self.nets["f"] # for clarity
         if type == 'beta':
             pred = b(Xkp,k+1)
-            with torch.no_grad():
-                actual = (Xk-Xkp)/self.gamma[k].view(-1,1) + (f(Xk,k) - f(Xkp,k)) if self.dataset == "2d" else Xkp + (f(Xk,k)-f(Xkp,k))
+            if self.dataset == "2d":
+                with torch.no_grad():
+                    actual = (Xk-Xkp)/self.gamma[k].view(-1,1) + (f(Xk,k) - f(Xkp,k))
+            else:
+                with torch.no_grad():
+                    actual = Xkp + (f(Xk,k)-f(Xkp,k))
         else:
             pred = f(Xk,k)
-            with torch.no_grad():
-                actual = (Xkp-Xk)/self.gamma[k+1].view(-1,1) + (b(Xkp,k+1) - b(Xk,k+1)) if self.dataset == "2d" else Xk + (f(Xkp,k+1)-f(Xk,k+1))
+            if self.dataset == "2d":
+                with torch.no_grad():
+                    actual = (Xkp-Xk)/self.gamma[k+1].view(-1,1) + (b(Xkp,k+1) - b(Xk,k+1))
+            else:
+                with torch.no_grad():
+                    actual = Xk + (f(Xkp,k+1)-f(Xk,k+1))
         loss = F.mse_loss(pred, actual)
         return loss
 
@@ -259,79 +298,78 @@ class CachedDSB(nn.Module):
         Xkp = self.cache[k+1,j,:] # all the X_{k(j)+1}^j
         return k, Xk, Xkp
     
-    def generate_path(self, type: str, M: int=None, X_init: torch.Tensor=None, remove_last_noise: bool=False, cache_mode: bool=True) -> torch.Tensor:
-        """
-        Generates M forward/reverse paths based on type.
-        - beta generates forward paths (using f!)
-        - alpha generates reverse paths (using b!)
-        """
-        if ((X_init is None) and (M is None)) or ((X_init is not None) and (M is not None)):
-            raise ValueError("You must specify exactly one of M (number of points) or X_init (initial positions).")
-        if X_init is None:
-            # X_init = self.pprior.sample(M) if type=="alpha" else self.pdata.sample(M)
-            X_init = self.pprior.sample(M) if type=="alpha" else self.pdata.sample(M)
-        X = self.reverse_path(X_init, remove_last_noise, cache_mode) if type=="alpha" else self.forward_path(X_init, remove_last_noise, cache_mode)
-        return X
+    # def generate_path(self, type: str, M: int=None, X_init: torch.Tensor=None, remove_last_noise: bool=False, cache_mode: bool=True) -> torch.Tensor:
+    #     """
+    #     Generates M forward/reverse paths based on type.
+    #     - beta generates forward paths (using f!)
+    #     - alpha generates reverse paths (using b!)
+    #     """
+    #     if ((X_init is None) and (M is None)) or ((X_init is not None) and (M is not None)):
+    #         raise ValueError("You must specify exactly one of M (number of points) or X_init (initial positions).")
+    #     if X_init is None:
+    #         # X_init = self.pprior.sample(M) if type=="alpha" else self.pdata.sample(M)
+    #         X_init = self.pprior.sample(M) if type=="alpha" else self.pdata.sample(M)
+    #     X = self.reverse_path(X_init, remove_last_noise, cache_mode) if type=="alpha" else self.forward_path(X_init, remove_last_noise, cache_mode)
+    #     return X
 
-    def forward_path(self, X0: torch.Tensor, remove_last_noise: bool=False, cache_mode: bool=True) -> torch.Tensor:
-        """
-        Uses current self.f !
-        Takes tensor X0 of dim (M,d) of initial positions and samples the corresponding paths P^i starting from X0^i such that P is of shape (N+1,M,d)
-        """
-        print(f'cache mode= {cache_mode}')
-        X = self.cache if cache_mode else torch.zeros(self.N+1, *X0.shape, device=self.device) # shape (N+1,M,d)
-        M = X0.shape[0]
-        X[0] = X0
-        if cache_mode: self.Z.normal_() # in-place!
-        Z = self.Z if cache_mode else torch.randn(self.N, *X0.shape, device=self.device) # shape (N,M,d)
-        if remove_last_noise:
-            Z[-1].zero_()
-        ones = self.ones if cache_mode else torch.ones(M, dtype=torch.int, device=self.device)
-        if self.dataset == '2d':
-            with torch.no_grad():
-                for k in range(self.N):
-                    X[k+1] = X[k] + self.gamma[k]*self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k] # drift-matching for 2d dataset (because the underlying model does not have residual structure)
-        else:
-            with torch.no_grad():
-                for k in range(self.N):
-                    X[k+1] = self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k] # mean-matching for image datasets (the underlying  U-Net model does have a residual structure)
-        self.memory_summary("after loop")
-        return X
+    # def forward_path(self, X0: torch.Tensor, remove_last_noise: bool=False, cache_mode: bool=True) -> torch.Tensor:
+    #     """
+    #     Uses current self.f !
+    #     Takes tensor X0 of dim (M,d) of initial positions and samples the corresponding paths P^i starting from X0^i such that P is of shape (N+1,M,d)
+    #     """
+    #     X = self.cache if cache_mode else torch.zeros(self.N+1, *X0.shape, device=self.device) # shape (N+1,M,d)
+    #     M = X0.shape[0]
+    #     X[0] = X0
+    #     if cache_mode: self.Z.normal_() # in-place!
+    #     Z = self.Z if cache_mode else torch.randn(self.N, *X0.shape, device=self.device) # shape (N,M,d)
+    #     if remove_last_noise:
+    #         Z[-1].zero_()
+    #     ones = self.ones if cache_mode else torch.ones(M, dtype=torch.int, device=self.device)
+    #     if self.dataset == '2d':
+    #         with torch.no_grad():
+    #             for k in range(self.N):
+    #                 # use X[k+1].copy_() for in-place modif?
+    #                 X[k+1] = X[k] + self.gamma[k]*self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k] # drift-matching for 2d dataset (because the underlying model does not have residual structure)
+    #     else:
+    #         with torch.no_grad():
+    #             for k in range(self.N):
+    #                 X[k+1] = self.nets["f"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k] # mean-matching for image datasets (the underlying  U-Net model does have a residual structure)
+    #     return X
     
-    def reverse_path(self, XN: torch.Tensor, remove_last_noise: bool=False, cache_mode: bool=True) -> torch.Tensor:
-        """
-        Uses current self.b !
-        Takes tensor XN of dim (M,d) of final positions and samples the corresponding paths P^i starting from XN^i such that P is of shape (N+1,M,d)
-        """
-        X = self.cache if cache_mode else torch.zeros(self.N+1, *XN.shape, device=self.device) # shape (N+1,M,d)
-        M = XN.shape[0]
-        X[-1] = XN
-        if cache_mode: self.Z.normal_() # in-place!
-        Z = self.Z if cache_mode else torch.randn(self.N, *XN.shape, device=self.device) # shape (N,M,d)
-        if remove_last_noise:
-            Z[0].zero_()
-        ones = self.ones if cache_mode else torch.ones(M, dtype=torch.int, device=self.device)
-        if self.dataset == "2d":
-            with torch.no_grad():
-                for k in range(self.N,0,-1):
-                    X[k-1] = X[k] + self.gamma[k]*self.nets["b"](X[k],k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1] # drift-matching for 2d dataset
-        else:
-            with torch.no_grad():
-                for k in range(self.N,0,-1):
-                    X[k-1] = self.nets["b"](X[k],k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1] # mean-matching for image dataset
-        return X
+    # def reverse_path(self, XN: torch.Tensor, remove_last_noise: bool=False, cache_mode: bool=True) -> torch.Tensor:
+    #     """
+    #     Uses current self.b !
+    #     Takes tensor XN of dim (M,d) of final positions and samples the corresponding paths P^i starting from XN^i such that P is of shape (N+1,M,d)
+    #     """
+    #     X = self.cache if cache_mode else torch.zeros(self.N+1, *XN.shape, device=self.device) # shape (N+1,M,d)
+    #     M = XN.shape[0]
+    #     X[-1] = XN
+    #     if cache_mode: self.Z.normal_() # in-place!
+    #     Z = self.Z if cache_mode else torch.randn(self.N, *XN.shape, device=self.device) # shape (N,M,d)
+    #     if remove_last_noise:
+    #         Z[0].zero_()
+    #     ones = self.ones if cache_mode else torch.ones(M, dtype=torch.int, device=self.device)
+    #     if self.dataset == "2d":
+    #         with torch.no_grad():
+    #             for k in range(self.N,0,-1):
+    #                 X[k-1] = X[k] + self.gamma[k]*self.nets["b"](X[k],k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1] # drift-matching for 2d dataset
+    #     else:
+    #         with torch.no_grad():
+    #             for k in range(self.N,0,-1):
+    #                 X[k-1] = self.nets["b"](X[k],k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1] # mean-matching for image dataset
+    #     return X
     
-    def full_generation(self, M: int, remove_last_noise: bool=True) -> torch.Tensor:
-        X_init = self.pprior.sample(M) # initial noise
-        X = torch.zeros((2*self.L, self.N+1, *X_init.shape))
-        for n in range(self.L):
-            self.load_model("alpha", n)
-            X_forward = self.generate_path("beta", X_init=X[2*n-1,0], remove_last_noise=remove_last_noise) if n>0 else self.generate_path("beta", X_init=X_init, remove_last_noise=remove_last_noise)
-            X[2*n] = X_forward
-            self.load_model("beta", n)
-            X_backward = self.generate_path("alpha", X_init=X[2*n][-1], remove_last_noise=remove_last_noise)
-            X[2*n+1] = X_backward
-        return X
+    # def full_generation(self, M: int, remove_last_noise: bool=True) -> torch.Tensor:
+    #     X_init = self.pprior.sample(M) # initial noise
+    #     X = torch.zeros((2*self.L, self.N+1, *X_init.shape))
+    #     for n in range(self.L):
+    #         self.load_model("alpha", n)
+    #         X_forward = self.generate_path("beta", X_init=X[2*n-1,0], remove_last_noise=remove_last_noise) if n>0 else self.generate_path("beta", X_init=X_init, remove_last_noise=remove_last_noise)
+    #         X[2*n] = X_forward
+    #         self.load_model("beta", n)
+    #         X_backward = self.generate_path("alpha", X_init=X[2*n][-1], remove_last_noise=remove_last_noise)
+    #         X[2*n+1] = X_backward
+    #     return X
 
 
 def build_pe(d_model: int, max_len: int) -> torch.Tensor:

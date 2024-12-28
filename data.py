@@ -40,7 +40,7 @@ class GaussianSampler(DataSampler):
         return self.mean + self.std * torch.rand((n, *self.mean.shape))
     
     def __str__(self):
-        return f"GaussianSampler(mean={self.mean}, std={self.std})"
+        return f"GaussianSampler()"
 
 # TagSampler class
 class TagSampler(DataSampler):
@@ -70,7 +70,7 @@ class TagSampler(DataSampler):
         return self.data[random_idx]
     
     def __str__(self):
-        return f"TagSampler(tag={self.tag}), n_samples={self.n_samples} mean={self.mean}, cov={self.std}"
+        return f"TagSampler(tag={self.tag}), n_samples={self.n_samples}), std={self.std}"
     
 
 # ImageSampler class
@@ -91,7 +91,7 @@ class ImageSampler(DataSampler):
         return self.data[random_idx]
     
     def __str__(self):
-        return f"ImageSampler(filename={self.filename}), n_samples={self.n_samples} mean={self.mean}, std={self.std}"
+        return f"ImageSampler(filename={self.filename}), n_samples={self.n_samples}, std={self.std}"
 
 
 def make_img_2d_dataset(filename: str):
