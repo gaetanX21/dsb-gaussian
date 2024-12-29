@@ -17,14 +17,14 @@ class CachedDSB(nn.Module):
     """
     Implements Cached Diffusion Schrödinger Bridge as proposed by De Bortoli et al. (cf. https://arxiv.org/abs/2106.01357)
     """
-    def __init__(self, dataset: str, name: str, host: str, parent_dir: str, device: torch.device, L: int, N: int, n_epoch: int, cache_size: int, cache_period: int,  lr: float, batch_size: int, gamma0: float, gamma_bar: float, model: nn.Module, data_shape: tuple[int], pprior: DataSampler, pdata: DataSampler, logger: logging.Logger, use_ema: bool=False, use_sgd: bool=False):
+    def __init__(self, dataset: str, name: str, host: str, parent_dir: str, device: torch.device, L: int, N: int, n_epoch: int, cache_size: int, cache_period: int,  lr: float, batch_size: int, gamma: float, model: nn.Module, data_shape: tuple[int], pprior: DataSampler, pdata: DataSampler, logger: logging.Logger, use_ema: bool=False, use_sgd: bool=False):
         super().__init__()
 
         # set logger
         self.logger = logger
         self.logger.info("-"*42)
         self.logger.info("Initializing CachedDSB with the following parameters:")
-        self.logger.info(f"name={name}, parent_dir={parent_dir}, host={host}, device={device}, L={L}, N={N}, n_epoch={n_epoch} cache_size={cache_size}, cache_period={cache_period}, lr={lr}, batch_size={batch_size}, gamma0={gamma0}, gamma_bar={gamma_bar}")
+        self.logger.info(f"name={name}, parent_dir={parent_dir}, host={host}, device={device}, L={L}, N={N}, n_epoch={n_epoch} cache_size={cache_size}, cache_period={cache_period}, lr={lr}, batch_size={batch_size}, gamma={gamma}")
         n_model_params = sum(p.numel() for p in model(max_len=1).parameters())
         self.logger.info(f"model={model.__name__}, n_model_params={n_model_params}")
         self.logger.info(f"prior={pprior}, data={pdata}")
@@ -44,7 +44,7 @@ class CachedDSB(nn.Module):
         self.cache_period = cache_period
         self.lr = lr
         self.batch_size = batch_size
-        self.build_gamma(gamma0, gamma_bar)
+        self.gamma = gamma
         self.pprior = pprior
         self.pdata = pdata
         self.model = model
@@ -54,12 +54,10 @@ class CachedDSB(nn.Module):
 
         # instantiate f and b
         self.type_to_net = {"alpha": "f", "beta": "b"} # just for clarity
-        self.memory_summary("Before initializing f & b")
         self.nets = {
             "f": model(init_zero=True, max_len=N+1).to(device), # forward network, parametrized by alpha
             "b": model(max_len=N+1).to(device) # backward network, parametrized by beta
         }
-        self.memory_summary("After initializing f & b")
         if self.use_ema:
             self.ema = EMA(self.nets["f"])
         self.save_weights('alpha', 0) # initialize alpha_0 as 0 --> useless but ok
@@ -105,18 +103,20 @@ class CachedDSB(nn.Module):
         )
         return instance
 
-    def memory_summary(self, title: str):
-        self.logger.debug(f"[{title}] Memory Allocated: {torch.cuda.memory_allocated() / 1024**2:.0f} MiB | Memory Reserved: {torch.cuda.memory_reserved() / 1024**2:.0f} MiB")
+    def track_memory(func):
+        """
+        Logs Memory (Allocated & Reserved) before and after calling a function.
+        """
+        def wrapper(self, *args, **kwargs):
+            mem_alloc_before = int(torch.cuda.memory_allocated() / 1024**2) # MiB
+            mem_res_before = int(torch.cuda.memory_reserved() / 1024**2) # MiB
+            output = func(self, *args, **kwargs)
+            mem_alloc_after = int(torch.cuda.memory_allocated() / 1024**2) # MiB
+            mem_res_before = int(torch.cuda.memory_reserved() / 1024**2) # MiB
 
-    def build_gamma(self, gamma0: float, gamma_bar: float):
-        if self.dataset == '2d':
-            self.gamma = gamma0 * torch.ones((self.N+1,))
-        else:
-            k = torch.arange(0, self.N//2) # 0 to N//2 excluded
-            gamma_half = gamma0 + 2*k/self.N  * (gamma_bar - gamma0)
-            self.gamma = torch.cat([gamma_half, torch.Tensor([gamma_bar]), torch.flip(gamma_half, dims=[0])])
-        self.gamma = self.gamma.to(self.device)
-        self.logger.info(f"Using gamma {self.gamma} of length {len(self.gamma)} (should be {self.N+1})")
+            self.logger.debug(f'[{func.__name__}] Mem. Alloc. {mem_alloc_before} -> {mem_alloc_after} MiB | Mem. Res. {mem_res_before} -> {mem_alloc_after} MiB.')
+            return output
+        return wrapper
 
     def load_model(self, type: str, n: int, ema: bool=False):
         """
