@@ -365,7 +365,7 @@ class Dense(nn.Module):
 
 class PositionalUNet(nn.Module):
   "Position-conditional U-Net to estimate the score network."""
-  def __init__(self, n_channels: int=1, channels: list[int]=[32,64,128,256], embed_dim: int=64, max_len: int=51, init_zero: bool=False):
+  def __init__(self, max_len: int, n_channels: int=1, channels: list[int]=[32,64,128,256], embed_dim: int=128, init_zero: bool=False):
     """Initialize a time-dependent score-based network.
     Args:
       channels: The number of channels for feature maps for each layer.
@@ -375,7 +375,11 @@ class PositionalUNet(nn.Module):
     # embed time
     pe = build_pe(d_model=embed_dim, max_len=max_len)
     self.register_buffer('pe', pe) # to make sure it's non-trainable
-    self.lin_embed = nn.Linear(embed_dim, embed_dim)
+    self.embed = nn.Sequential(
+        nn.Linear(embed_dim, embed_dim),
+        nn.SiLU(),
+        nn.Linear(embed_dim, embed_dim)
+    )
     # encoder
     self.conv1 = nn.Conv2d(in_channels=n_channels, out_channels=channels[0], kernel_size=3, stride=1, bias=False)
     self.dense1 = Dense(embed_dim, channels[0])
@@ -409,7 +413,85 @@ class PositionalUNet(nn.Module):
 
   def forward(self, x: torch.Tensor, t: torch.IntTensor):
     # embed time
-    embedding = self.activation(self.lin_embed(self.pe[t]))
+    embedding = self.activation(self.embed(self.pe[t]))
+    # encoder
+    h1 = self.activation( self.gnorm1( self.conv1(x)+self.dense1(embedding) ) )
+    h2 = self.activation( self.gnorm2( self.conv2(h1)+self.dense2(embedding) ) )
+    h3 = self.activation ( self.gnorm3( self.conv3(h2)+self.dense3(embedding) ) )
+    h4 = self.activation ( self.gnorm4( self.conv4(h3)+self.dense4(embedding) ) )
+    # decoder
+    h5 = self.activation ( self.tgnorm4( self.tconv4(h4)+self.dense5(embedding) ) )
+    h6 = self.activation ( self.tgnorm3( self.tconv3(torch.cat([h5,h3],dim=1))+self.dense6(embedding) ) )
+    h7 = self.activation ( self.tgnorm2 ( self.tconv2(torch.cat([h6,h2],dim=1))+self.dense7(embedding) ) )
+    h8 = self.tconv1(torch.cat([h7,h1], dim=1))
+    # normalize output
+    h = h8 # / self.marginal_prob_std(t)[:,None,None,None]
+    return h
+
+
+
+# use time embedding instead
+class TimeEmbedding(nn.Module):
+  """Gaussian random features for encoding time."""
+  def __init__(self, n_channels: int=1, channels: list[int]=[32,64,128,256], embed_dim: int=128, max_len: int=51, init_zero: bool=False):
+    """Initialize Gaussian random features.
+    Args:
+      embed_dim: the dimensionality of the output embedding.
+      scale: the scale of the Gaussian random features.
+    """
+    super().__init__()
+    # self.W = nn.Parameter(torch.randn(embed_dim//2)*scale, requires_grad=False)
+    self.W = nn.Parameter(torch.randn(embed_dim//2), requires_grad=False)
+  def forward(self, x):
+    theta = x[:,None]*self.W[None,:] * 2 * torch.pi
+    return torch.cat([torch.sin(theta), torch.cos(theta)], dim=-1)
+  
+
+class TimeUNet(nn.Module):
+  "Position-conditional U-Net to estimate the score network."""
+  def __init__(self, n_channels: int=1, channels: list[int]=[32,64,128,256], embed_dim: int=64, max_len: int=51, init_zero: bool=False):
+    """Initialize a time-dependent score-based network.
+    Args:
+      channels: The number of channels for feature maps for each layer.
+      embed_dim: The dimensionality of the Gaussian random feature embedding.
+    """
+    super().__init__()
+    # embed time
+    self.embed = nn.Sequential(TimeEmbedding(embed_dim=embed_dim), nn.Linear(embed_dim, embed_dim))
+    # encoder
+    self.conv1 = nn.Conv2d(in_channels=n_channels, out_channels=channels[0], kernel_size=3, stride=1, bias=False)
+    self.dense1 = Dense(embed_dim, channels[0])
+    self.gnorm1 = nn.GroupNorm(num_groups=4, num_channels=channels[0])
+    self.conv2 = nn.Conv2d(in_channels=channels[0], out_channels=channels[1], kernel_size=3, stride=2, bias=False)
+    self.dense2 = Dense(embed_dim, channels[1])
+    self.gnorm2 = nn.GroupNorm(num_groups=32, num_channels=channels[1])
+    self.conv3 = nn.Conv2d(in_channels=channels[1], out_channels=channels[2], kernel_size=3, stride=2, bias=False)
+    self.dense3 = Dense(embed_dim, channels[2])
+    self.gnorm3 = nn.GroupNorm(num_groups=32, num_channels=channels[2])
+    self.conv4 = nn.Conv2d(in_channels=channels[2], out_channels=channels[3], kernel_size=3, stride=2, bias=False)
+    self.dense4 = Dense(embed_dim, channels[3])
+    self.gnorm4 = nn.GroupNorm(num_groups=32, num_channels=channels[3])
+    # decoder
+    self.tconv4 = nn.ConvTranspose2d(in_channels=channels[3], out_channels=channels[2], kernel_size=3, stride=2, bias=False)
+    self.dense5 = Dense(embed_dim, channels[2])
+    self.tgnorm4 = nn.GroupNorm(num_groups=32, num_channels=channels[2])
+    self.tconv3 = nn.ConvTranspose2d(in_channels=channels[2]*2, out_channels=channels[1], kernel_size=3, stride=2, bias=False, output_padding=1)
+    self.dense6 = Dense(embed_dim, channels[1])
+    self.tgnorm3 = nn.GroupNorm(num_groups=32, num_channels=channels[1])
+    self.tconv2 = nn.ConvTranspose2d(in_channels=channels[1]*2, out_channels=channels[0], kernel_size=3, stride=2, bias=False, output_padding=1)
+    self.dense7 = Dense(embed_dim, channels[0])
+    self.tgnorm2 = nn.GroupNorm(num_groups=32, num_channels=channels[0])
+    self.tconv1 = nn.ConvTranspose2d(in_channels=channels[0]*2, out_channels=n_channels, kernel_size=3, stride=1)
+    # activation
+    self.activation = lambda x: x*torch.sigmoid(x) # swish activation function
+
+    if init_zero:
+        for param in self.parameters():
+            param.data.zero_()
+
+  def forward(self, x: torch.Tensor, t: float):
+    # embed time
+    embedding = self.activation(self.embed(t))
     # encoder
     h1 = self.activation( self.gnorm1( self.conv1(x)+self.dense1(embedding) ) )
     h2 = self.activation( self.gnorm2( self.conv2(h1)+self.dense2(embedding) ) )

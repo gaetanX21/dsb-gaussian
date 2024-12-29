@@ -29,7 +29,8 @@ def main():
     else:
         # create dirs
         os.makedirs(os.path.join(args.parent_dir, args.name, "weights"), exist_ok=True)
-        os.makedirs(os.path.join(args.parent_dir, args.name, "weights_EMA"), exist_ok=True)
+        if args.use_ema:
+            os.makedirs(os.path.join(args.parent_dir, args.name, "weights_EMA"), exist_ok=True)
         # set logging level
         if args.debug:
             verbose_level = logging.DEBUG
