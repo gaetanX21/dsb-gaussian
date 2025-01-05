@@ -27,7 +27,7 @@ async def distribute_tasks(exp_dir: str):
             print(f'Experiment {exp} successfully attributed to host {host}')
             i += 1 # moving on to next task
         except Exception as e:
-            print(f'Caught exception: {e}, trying next server')
+            print(f'Caught exception on host {host}, trying next server\nException caught: {e}')
         
         if i >= n_config: # all tasks have been distributed
             print("All tasks have been distributed")

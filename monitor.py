@@ -27,7 +27,7 @@ def monitor_tasks(sweep_dir: str, interval: int):
                 status = {"host": "?", "gpu_name": "unknown", "gpu_mem": "unknown", "ipf_step": "?", "time_elapsed": 0, "status": "?"}
             
             # Extract fields from the status line
-            host = status["host"]
+            host = colored(status["host"], "green")
             gpu_name = status["gpu_name"]
             gpu_mem = status["gpu_mem"]
             ipf_step = status["ipf_step"]
@@ -52,11 +52,14 @@ def monitor_tasks(sweep_dir: str, interval: int):
             else:
                 status_colored = colored("Unknown", "red")
 
+            task_number = colored(i+1, "cyan")
+            exp = colored(exp, "magenta")
+
             # Add row to the table
-            table.append([exp, host, gpu_name, gpu_mem, ipf_step, time_elapsed_str, elapsed_since_update, status_colored])
+            table.append([task_number, exp, host, gpu_name, gpu_mem, ipf_step, time_elapsed_str, elapsed_since_update, status_colored])
 
         # Print table using tabulate
-        print(tabulate(table, headers=["Experiment", "Host", "GPU", "GPU Memory", "IPF Step", "Time Elapsed To Last IPF Step", "Time Elapsed Since Last IPF Step", "Status"], tablefmt="fancy_grid"))
+        print(tabulate(table, headers=["#", "Name", "Host", "GPU", "GPU Memory", "IPF Step", "Time Elapsed To Last IPF Step", "Time Elapsed Since Last IPF Step", "Status"], tablefmt="fancy_grid"))
         time.sleep(interval)
 
 
@@ -64,6 +67,6 @@ def monitor_tasks(sweep_dir: str, interval: int):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Monitoring script")
     parser.add_argument("sweep_dir", help="sweep directory to monitor")
-    parser.add_argument("-i", "--interval", default=1, help="interval (s) between each refresh")
+    parser.add_argument("-i", "--interval", default=1, type=int, help="interval (s) between each refresh")
     args = parser.parse_args()
     monitor_tasks(args.sweep_dir, args.interval)
