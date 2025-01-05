@@ -134,7 +134,14 @@ def config_to_p(pconfig: dict) -> DataSampler:
     elif pconfig["type"] == "gaussian":
         dim = pconfig["dim"]
         mean = torch.ones((dim,)) * pconfig["mean"]
-        L = torch.tensor(pconfig["L"], dtype=torch.float32) # list -> tensor
+        if pconfig["cov_type"] == "spherical":
+            std = torch.tensor(pconfig["std"], dtype=torch.float32)
+            L = std * torch.eye(dim)
+        elif pconfig["cov_type"] == "diagonal":
+            D = torch.tensor(pconfig["D"], dtype=torch.float32)
+            L = torch.diag(D)
+        else:
+            L = torch.tensor(pconfig["L"], dtype=torch.float32)
         p = GaussianSampler(mean, L)
     else:
         raise ValueError(f'Invalid p type. pconfig={pconfig}') 
@@ -151,10 +158,9 @@ def random_L(cov_type: str, dim: int) -> torch.Tensor:
     elif cov_type == "general":
         Z = torch.randn((dim,dim))
         svd = torch.linalg.svd(Z)
-        O = svd[0] @ svd[2]
+        O = svd[0] @ svd[2] # random orthogonal matrix
         sigma_i = torch.rand((dim,))
-        D = torch.diag(sigma_i)
-        L = O @ D
+        L = O @ torch.diag(sigma_i) # L=O@D^(1/2) such that Sigma = O@D^O.T
     else:
         raise ValueError(f'Invalid cov_type {cov_type}') 
     return L

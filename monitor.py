@@ -23,11 +23,13 @@ def monitor_tasks(sweep_dir: str, interval: int):
                 with open(status_file, "r") as f:
                     status = yaml.safe_load(f)
             except Exception as e:
-                print(f'Caught exception: {e}')
-                status = {"host": "?", "ipf_step": "?", "time_elapsed": 0, "status": "?"}
+                # print(f'Caught exception: {e}')
+                status = {"host": "?", "gpu_name": "unknown", "gpu_mem": "unknown", "ipf_step": "?", "time_elapsed": 0, "status": "?"}
             
             # Extract fields from the status line
             host = status["host"]
+            gpu_name = status["gpu_name"]
+            gpu_mem = status["gpu_mem"]
             ipf_step = status["ipf_step"]
             time_elapsed_total = status["time_elapsed"]
             time_elapsed_str = f"{time_elapsed_total // 3600}h {(time_elapsed_total % 3600) // 60}m {time_elapsed_total % 60}s"
@@ -51,10 +53,10 @@ def monitor_tasks(sweep_dir: str, interval: int):
                 status_colored = colored("Unknown", "red")
 
             # Add row to the table
-            table.append([exp, host, ipf_step, time_elapsed_str, elapsed_since_update, status_colored])
+            table.append([exp, host, gpu_name, gpu_mem, ipf_step, time_elapsed_str, elapsed_since_update, status_colored])
 
         # Print table using tabulate
-        print(tabulate(table, headers=["Experiment", "Host", "IPF Step", "Time Elapsed To Last IPF Step", "Time Elapsed Since Last IPF Step", "Status"], tablefmt="fancy_grid"))
+        print(tabulate(table, headers=["Experiment", "Host", "GPU", "GPU Memory", "IPF Step", "Time Elapsed To Last IPF Step", "Time Elapsed Since Last IPF Step", "Status"], tablefmt="fancy_grid"))
         time.sleep(interval)
 
 

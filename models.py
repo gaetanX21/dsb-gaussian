@@ -11,13 +11,14 @@ import yaml
 import data
 from os.path import join
 from ema import EMA
+from os import popen
 
 
 class CachedDSB(nn.Module):
     """
     Implements Cached Diffusion Schrödinger Bridge as proposed by De Bortoli et al. (cf. https://arxiv.org/abs/2106.01357)
     """
-    def __init__(self, dataset: str, name: str, host: str, parent_dir: str, device: torch.device, L: int, N: int, n_epoch: int, cache_size: int, cache_period: int,  lr: float, batch_size: int, gamma: float, model: nn.Module, pprior: DataSampler, pdata: DataSampler, logger: logging.Logger, use_ema: bool=False, use_sgd: bool=False):
+    def __init__(self, dataset: str, name: str, host: str, gpu_name: str, gpu_mem: str, parent_dir: str, device: torch.device, L: int, N: int, n_epoch: int, cache_size: int, cache_period: int,  lr: float, batch_size: int, gamma: float, model: nn.Module, pprior: DataSampler, pdata: DataSampler, logger: logging.Logger, use_ema: bool=False, use_sgd: bool=False):
         super().__init__()
 
         # set logger
@@ -36,6 +37,8 @@ class CachedDSB(nn.Module):
         self.parent_dir = parent_dir
         self.status_file = join(parent_dir, name, "status.yaml")
         self.host = host
+        self.gpu_name = gpu_name
+        self.gpu_mem = gpu_mem
         self.device = device
         self.L = L
         self.N = N
@@ -65,7 +68,7 @@ class CachedDSB(nn.Module):
         self.cache = None # cache for training (used later)
 
     @classmethod
-    def from_config(cls, config_file, logger, host: str="unknown"):
+    def from_config(cls, config_file, logger: logging.Logger=None, host: str="unknown"):
         with open(config_file, 'r') as f:
             config = yaml.safe_load(f)
 
@@ -74,11 +77,16 @@ class CachedDSB(nn.Module):
         pprior = data.config_to_p(config['pprior'])
         # create CachedDSB instance
         model_config = config['model']
+
+        gpu_name, gpu_mem = popen("nvidia-smi --query-gpu=gpu_name,memory.total --format=csv").read().strip().split("\n")[1].split(", ") # quick & dirty
+
         instance = cls(
             dataset = config["general"]["dataset"],
             device = torch.device(config["general"]["device"]),
             name = config["general"]["name"],
             host = host,
+            gpu_name = gpu_name,
+            gpu_mem = gpu_mem,
             parent_dir = config["general"]["parent_dir"],
             L = model_config["L"],
             N = model_config["N"],
@@ -91,7 +99,7 @@ class CachedDSB(nn.Module):
             model = PositionalMLP,
             pprior = pprior,
             pdata = pdata,
-            logger = logger,
+            logger = logger if logger is not None else logging.getLogger(__name__),
             use_ema = config["model"]["use_ema"],
             use_sgd = config["model"]["use_sgd"],
         )
@@ -183,6 +191,8 @@ class CachedDSB(nn.Module):
     def update_status(self, type: str, n: int):
         status = {
             "host": self.host,
+            "gpu_name": self.gpu_name,
+            "gpu_mem": self.gpu_mem,
             "ipf_step": f"{type} {n}/{self.L}" if n<self.L else "-",
             "time_elapsed": int(time.time() - self.t0),
             "status": "training" if n<self.L else "completed"

@@ -43,7 +43,7 @@ async def run_on_host(host, config_file: str):
     conn = None
     try:
         conn = fabric.Connection(host, user=USER, connect_kwargs={"password": PSWD})
-        cmd = f"cd {PROJECT_DIR} && python main.py --config_file {config_file} --host {host} --name EMPTY"
+        cmd = f"cd {PROJECT_DIR} && python main.py --config_file {config_file} --host {host}"
         
         # Start the process
         result = await asyncio.to_thread(conn.run, cmd)

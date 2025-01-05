@@ -13,6 +13,7 @@ def save_config(args, device):
             "parent_dir": args.parent_dir,
             "host": args.host,
             "dataset": args.dataset,
+            "cov_seed": args.cov_seed
         },
         "model": {
             "L": args.L,
@@ -39,15 +40,23 @@ def save_config(args, device):
         "dim": dim,
         "mean": args.mean_prior,
         "cov_type": args.cov_type,
-        "L": data.random_L(args.cov_type, dim).tolist()
     }
     config["pdata"] = {
         "type": "gaussian",
         "dim": dim,
         "mean": args.mean_data,
         "cov_type": args.cov_type,
-        "L": data.random_L(args.cov_type, dim).tolist()
     }
+
+    if args.cov_type == "spherical":
+        config["pprior"]["std"] = torch.rand((1,)).tolist()
+        config["pdata"]["std"] = torch.rand((1,)).tolist()
+    elif args.cov_type == "diagonal":
+        config["pprior"]["D"] = torch.rand((dim,)).tolist()
+        config["pdata"]["D"] = torch.rand((dim,)).tolist()
+    else:
+        config["pprior"]["L"] = data.random_L(args.cov_type, dim).tolist()
+        config["pdata"]["L"] = data.random_L(args.cov_type, dim).tolist()
 
     # save config to YAML
     config_file = join(args.parent_dir, args.name, 'config.yaml')

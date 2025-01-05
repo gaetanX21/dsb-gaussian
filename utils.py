@@ -8,6 +8,8 @@ import os
 from os.path import join
 import yaml
 from scipy.linalg import sqrtm
+from torch.linalg import matrix_norm
+import subprocess
 
 
 def plot_path_2d(path: np.ndarray, t: np.ndarray) -> None:
@@ -181,37 +183,41 @@ def plot_image(path: torch.Tensor):
 
 #################################################################
 
-def assess_performance(dsb: models.CachedDSB, M: int=250_000) -> tuple[list[float], list[float]]:
-    Sigma, Sigma_prime = get_Sigmas(dsb) # i.e. Sigma_pdata, Sigma_pprior
+def error(estimator: torch.Tensor, reference: torch.Tensor, rel: bool=True) -> float:
+    if rel:
+        err = matrix_norm(estimator-reference) / matrix_norm(reference)
+    else:
+        err = matrix_norm(estimator-reference)
+    return err
+
+def assess_performance(dsb: models.CachedDSB, L: int, M: int=250_000, direction: str="reverse", rel: bool=True) -> tuple:
+    Sigma, Sigma_prime = dsb.pdata.Sigma, dsb.pprior.Sigma
     sigma2 = 2 * dsb.N * dsb.gamma
     C = get_C(Sigma, Sigma_prime, sigma2)
-    Sigma_error, C_error = [], []
+    Sigma_error, Sigma_prime_error, C_error = torch.zeros(L), torch.zeros(L), torch.zeros(L)
+    for n in range(0, L):
+        Sigma_emp, Sigma_prime_emp, C_emp = empirical_cov(dsb, n, M, direction)
+        Sigma_error[n] = error(Sigma_emp, Sigma, rel)
+        Sigma_prime_error[n] = error(Sigma_prime_emp, Sigma_prime, rel)
+        C_error[n] = error(C_emp, C, rel)
+    return Sigma_error, Sigma_prime_error, C_error
 
-    for n in range(0, dsb.L):
+def empirical_cov(dsb: models.CachedDSB, n: int, M: int, direction: str) -> tuple:
+    if direction == "reverse":
         dsb.load_model('beta', n) # load beta_n to generate reverse paths
-        X = dsb.generate_path('alpha', M=M, remove_last_noise=True).cpu() # sample M bridges
-        X0, XN = X[0], X[-1]
-        Sigma_emp = (X0.T @ X0) / M # empirical covariance of X0 (which is generated and supposed to be close to pdata)
-        C_emp = (XN.T @ X0) / M # cross-correlation
-        Sigma_error.append(torch.linalg.matrix_norm(Sigma_emp-Sigma))
-        C_error.append(torch.linalg.matrix_norm(C_emp-C))
+        X = dsb.generate_path('alpha', M=M).cpu() # sample M bridges
+    elif direction == "forward":
+        dsb.load_model('alpha', n) # load alpha_n to generate forward paths
+        X = dsb.generate_path('beta', M=M).cpu() # sample M bridges     
+    else:
+        raise ValueError(f"Unknown direction: {direction}")   
+    X0, XN = X[0], X[-1]
+    Sigma_emp = (X0.T @ X0) / M # empirical covariance of X0
+    Sigma_prime_emp = (XN.T @ XN) / M # empirical covariance of XN
+    C_emp = (XN.T @ X0) / M # cross-correlation
+    return Sigma_emp, Sigma_prime_emp, C_emp
 
-    return Sigma_error, C_error
-
-
-def get_Sigmas(dsb: models.CachedDSB) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Retrieve Sigma_pdata and Sigma_pprior from DSB's config file.
-    """
-    config_file = join(dsb.parent_dir, dsb.name, "config.yaml")
-    with open(config_file, "r") as f:
-        config = yaml.safe_load(f)
-    L_pdata = torch.tensor(config["pdata"]["L"])
-    L_pprior = torch.tensor(config["pprior"]["L"])
-    Sigma_pdata, Sigma_pprior = L_pdata@L_pdata.T, L_pprior@L_pprior.T
-    return Sigma_pdata, Sigma_pprior
-
-def get_C(Sigma: torch.Tensor, Sigma_prime: torch.Tensor, sigma2: float) -> torch.tensor:
+def get_C(Sigma: torch.Tensor, Sigma_prime: torch.Tensor, sigma2: float) -> torch.Tensor:
     """
     Computes C according to the closed-form formula for Gaussian Schrödinger Bridge.
     """
@@ -223,3 +229,45 @@ def get_C(Sigma: torch.Tensor, Sigma_prime: torch.Tensor, sigma2: float) -> torc
     D = sqrtm(4 * Sigma_sqrt @ Sigma_prime @ Sigma_sqrt + sigma4 * I)
     C = 0.5 * (Sigma_sqrt @ D @ Sigma_sqrt_inv - sigma2 * I)
     return torch.tensor(C, dtype=torch.float32)
+
+def plot_perf(parent_dir: str, exp: str, L: int=20, direction: str="reverse", M: int=25_000):
+    cov_types = ["spherical", "diagonal", "general"]
+    x = range(L)
+    fig, axs = plt.subplots(ncols=2, figsize=(10,5))
+    for cov_type in cov_types:
+        name = exp+"_"+cov_type[:3]
+        config_file = join(parent_dir, name, "config.yaml")
+        dsb = models.CachedDSB.from_config(config_file, logger=None)
+        Sigma_error, Sigma_prime_error, C_error = assess_performance(dsb, L, M=M, direction=direction)
+        axs[0].plot(x, Sigma_error, label=cov_type)
+        axs[1].plot(x, C_error, label=cov_type)
+
+    symbols = ["\Sigma", "C"]
+    for i, ax in enumerate(axs):
+        s = symbols[i]
+        ax.set_title(r"Relative error of $\hat{" + s + r"}$ over DSB iterations")
+        ax.set_xlabel("DSB iteration $n$")
+        ax.set_ylabel(r"$\frac{||\hat{" + s + r"}-" + s + r"||^2_F}{||" + s + r"||^2_F}$")
+        ax.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+def create_sweep(sweep_dir: str, N: int, dim: int, cov_type: str):
+    for i in range(N):
+        name = f"{dim}d_{i}_{cov_type}"
+        cmd = f"python main.py --parent_dir {sweep_dir} --dataset {dim}d --name {name} --cov_type {cov_type} --cov_seed {i} --config_only"
+        os.system(cmd)
+    print(f"Sweep {sweep_dir} created successfully.")
+
+def assess_performance_sweep(sweep_dir: str, L: int, cov_type: str, M: int=250_000, direction: str="reverse", rel: bool=True) -> tuple:
+    exps = [exp for exp in os.listdir(sweep_dir) if os.path.isdir(join(sweep_dir, exp))]
+    exps = [exp for exp in exps if exp.endswith(cov_type)]
+    n_exp = len(exps)
+    print(f"Found {n_exp} exps in {sweep_dir} for cov_type {cov_type}")
+    Sigma_error, Sigma_prime_error, C_error = torch.zeros((n_exp,L)), torch.zeros((n_exp,L)), torch.zeros((n_exp,L))
+    for i, exp in enumerate(exps):
+        config_file = join(sweep_dir, exp, "config.yaml")
+        dsb = models.CachedDSB.from_config(config_file, None)
+        Sigma_error[i], Sigma_prime_error[i], C_error[i] = assess_performance(dsb, L, M, direction, rel)
+    return Sigma_error, Sigma_prime_error, C_error
