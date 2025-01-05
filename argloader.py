@@ -13,8 +13,16 @@ def get_args():
     group_verbosity.add_argument("-d", "--debug", action="store_true", help="run program in debug mode")
     group_verbosity.add_argument("-q", "--quiet", action="store_true", help="run program in quiet mode")
 
-    parser.add_argument("--mean", default=1, help="a=mean*1_dim to do N(a,Sigma) -> N(-a,Sigma)")
-    parser.add_argument("--std", default=1, help="Sigma=std*I_dim to do N(a,Sigma) -> N(-a,Sigma)")
+    parser.add_argument("--mean_prior", type=float, default=0, help="mean of prior distribution")
+    parser.add_argument("--mean_data", type=float, default=0, help="mean of data distribution")
+
+    parser.add_argument("--cov_type", required=True, help="random 'spherical' or 'diagonal' or 'general' covariance matrix for both pprior and pdata")
+    parser.add_argument("--cov_seed", type=int, default=42, help="seed value for RNG")
+    # group_cov.add_argument("--random_spherical", action="store_true", help="Sigma=std*I_dim and Sigma'=std'*I_dim with std, std' ~ U([0,1])")
+    # group_cov.add_argument("--random_diagonal", action="store_true", help="Sigma=Diag(sigma_i) and Sigma'=Diag(sigma_i') with sigma_i, sigma_' ~ U([0,1])")
+    # group_cov.add_argument("--random_general", action="store_true", help="Sigma, Sigma' ~ random SPD matrix")
+    
+    parser.add_argument("--random_diagonal")
     parser.add_argument("--dataset", required=True, help="experiment's name (config+weights+log will be stored in experiments/name/ folder)")
     parser.add_argument("--name", required=True, help="experiment's name (config+weights+log will be stored in experiments/name/ folder)")
     parser.add_argument("--parent_dir", default="experiments", help="parent directory to store the results (will be stored in directory/name)")

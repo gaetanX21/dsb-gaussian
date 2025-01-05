@@ -6,7 +6,8 @@ import torch
 import models
 import os
 from os.path import join
-import gc
+import yaml
+from scipy.linalg import sqrtm
 
 
 def plot_path_2d(path: np.ndarray, t: np.ndarray) -> None:
@@ -177,3 +178,48 @@ def plot_image(path: torch.Tensor):
         axs[i].imshow(path[i][0], cmap="gray")
         axs[i].axis(False)
     plt.show()
+
+#################################################################
+
+def assess_performance(dsb: models.CachedDSB, M: int=250_000) -> tuple[list[float], list[float]]:
+    Sigma, Sigma_prime = get_Sigmas(dsb) # i.e. Sigma_pdata, Sigma_pprior
+    sigma2 = 2 * dsb.N * dsb.gamma
+    C = get_C(Sigma, Sigma_prime, sigma2)
+    Sigma_error, C_error = [], []
+
+    for n in range(0, dsb.L):
+        dsb.load_model('beta', n) # load beta_n to generate reverse paths
+        X = dsb.generate_path('alpha', M=M, remove_last_noise=True).cpu() # sample M bridges
+        X0, XN = X[0], X[-1]
+        Sigma_emp = (X0.T @ X0) / M # empirical covariance of X0 (which is generated and supposed to be close to pdata)
+        C_emp = (XN.T @ X0) / M # cross-correlation
+        Sigma_error.append(torch.linalg.matrix_norm(Sigma_emp-Sigma))
+        C_error.append(torch.linalg.matrix_norm(C_emp-C))
+
+    return Sigma_error, C_error
+
+
+def get_Sigmas(dsb: models.CachedDSB) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Retrieve Sigma_pdata and Sigma_pprior from DSB's config file.
+    """
+    config_file = join(dsb.parent_dir, dsb.name, "config.yaml")
+    with open(config_file, "r") as f:
+        config = yaml.safe_load(f)
+    L_pdata = torch.tensor(config["pdata"]["L"])
+    L_pprior = torch.tensor(config["pprior"]["L"])
+    Sigma_pdata, Sigma_pprior = L_pdata@L_pdata.T, L_pprior@L_pprior.T
+    return Sigma_pdata, Sigma_pprior
+
+def get_C(Sigma: torch.Tensor, Sigma_prime: torch.Tensor, sigma2: float) -> torch.tensor:
+    """
+    Computes C according to the closed-form formula for Gaussian Schrödinger Bridge.
+    """
+    Sigma, Sigma_prime = Sigma.numpy(), Sigma_prime.numpy() # for compatibility with sqrtm()
+    Sigma_sqrt = sqrtm(Sigma)
+    Sigma_sqrt_inv = np.linalg.inv(Sigma_sqrt)
+    I = np.eye(Sigma.shape[0])
+    sigma4 = sigma2**2
+    D = sqrtm(4 * Sigma_sqrt @ Sigma_prime @ Sigma_sqrt + sigma4 * I)
+    C = 0.5 * (Sigma_sqrt @ D @ Sigma_sqrt_inv - sigma2 * I)
+    return torch.tensor(C, dtype=torch.float32)

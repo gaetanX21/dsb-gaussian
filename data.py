@@ -28,7 +28,7 @@ class DataSampler(ABC):
 
 # GaussianSampler class
 class GaussianSampler(DataSampler):
-    def __init__(self, mean: torch.Tensor, std: float):
+    def __init__(self, mean: torch.Tensor, L: torch.Tensor):
         """
         Initialize a Gaussian sampler.
         
@@ -37,13 +37,17 @@ class GaussianSampler(DataSampler):
             std: noise
         """
         self.mean = mean
-        self.std = std
+        self.L = L
+        self.LT = L.T # X = Z@L.T will yield Z_i ~ N(0,Sigma) with Sigma=L@L.T
+        self.Sigma = L@L.T
+        self.std = L.diag().sum()
     
     def sample(self, n: int) -> torch.Tensor:
-        return self.mean + self.std * torch.randn((n, *self.mean.shape))
+        Z = torch.randn((n, *self.mean.shape))
+        return self.mean + Z @ self.LT
     
     def __str__(self):
-        return f"GaussianSampler(mean={self.mean}, std={self.std})"
+        return f"GaussianSampler(mean={self.mean}, Sigma={self.Sigma})"
 
 # TagSampler class
 class TagSampler(DataSampler):
@@ -130,8 +134,27 @@ def config_to_p(pconfig: dict) -> DataSampler:
     elif pconfig["type"] == "gaussian":
         dim = pconfig["dim"]
         mean = torch.ones((dim,)) * pconfig["mean"]
-        std = pconfig["std"]
-        p = GaussianSampler(mean, std)
+        L = torch.tensor(pconfig["L"], dtype=torch.float32) # list -> tensor
+        p = GaussianSampler(mean, L)
     else:
         raise ValueError(f'Invalid p type. pconfig={pconfig}') 
     return p
+
+def random_L(cov_type: str, dim: int) -> torch.Tensor:
+    """Sigma=LL^T (Cholesky decomposition) and L is sampled randomly based on cov_type"""
+    if cov_type == "spherical":
+        std = torch.rand((1,))
+        L = std * torch.eye(dim)
+    elif cov_type == "diagonal":
+        sigma_i = torch.rand((dim,))
+        L = torch.diag(sigma_i)
+    elif cov_type == "general":
+        Z = torch.randn((dim,dim))
+        svd = torch.linalg.svd(Z)
+        O = svd[0] @ svd[2]
+        sigma_i = torch.rand((dim,))
+        D = torch.diag(sigma_i)
+        L = O @ D
+    else:
+        raise ValueError(f'Invalid cov_type {cov_type}') 
+    return L

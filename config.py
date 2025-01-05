@@ -1,5 +1,7 @@
 from os.path import join
 import yaml
+import data
+import torch
 
 def save_config(args, device):
     config = vars(args)
@@ -29,18 +31,23 @@ def save_config(args, device):
     }
 
     # set pprior/pdata config
+    dim = int(args.dataset[:-1])
+    torch.random.manual_seed(args.cov_seed) # for reproducibility
+
     config["pprior"] = {
         "type": "gaussian",
-        "dim": int(args.dataset[:-1]),
-        "mean": -args.mean,
-        "std": args.std
-    } # N(-a,I)
+        "dim": dim,
+        "mean": args.mean_prior,
+        "cov_type": args.cov_type,
+        "L": data.random_L(args.cov_type, dim).tolist()
+    }
     config["pdata"] = {
         "type": "gaussian",
-        "dim": int(args.dataset[:-1]),
-        "mean": args.mean,
-        "std": args.std
-    } # N(a,I)
+        "dim": dim,
+        "mean": args.mean_data,
+        "cov_type": args.cov_type,
+        "L": data.random_L(args.cov_type, dim).tolist()
+    }
 
     # save config to YAML
     config_file = join(args.parent_dir, args.name, 'config.yaml')
