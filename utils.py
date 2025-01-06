@@ -311,7 +311,7 @@ def clean_error(error: torch.Tensor, rank: bool=False, normalize: bool=False):
     return error, mean, std
 
 
-def save_res(cov_type: str, L: int=20, M: int=250_000, rank: bool=False, normalize: bool=False):
+def save_res(cov_type: str, L: int=20, M: int=250_000, rank: bool=False, normalize: bool=False, yscale: str="linear"):
     dims = [1,5,50]
     res = {}
     colors = ["red", "green", "blue"]
@@ -331,6 +331,7 @@ def save_res(cov_type: str, L: int=20, M: int=250_000, rank: bool=False, normali
         plt.xlabel("DSB iteration $n$")
         plt.xticks(x[::5])
         plt.ylabel(r"$||\hat{" + symbol + r"}-" + symbol + r"||^2_F$")
+        plt.yscale(yscale)
         plt.legend()
         plt.title(f"Error over DSB iteration ({cov_type})")
         s = symbol.strip("\\")
