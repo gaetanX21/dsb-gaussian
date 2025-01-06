@@ -177,3 +177,41 @@ def plot_image(path: torch.Tensor):
         axs[i].imshow(path[i][0], cmap="gray")
         axs[i].axis(False)
     plt.show()
+
+
+def plot_both_directions(dsb: models.CachedDSB, n: int):
+    # backward
+    dsb.load_model('beta', n)
+    dsb.init_cache()
+    dsb.refresh_cache("alpha")
+    XN = dsb.cache[-1].cpu()
+    XN_mean = XN.mean(dim=0)
+    distance = (XN-XN_mean.view(1,-1)).pow(exponent=2).sum(dim=1)
+    distance = 1 - distance / distance.max() # normalize to [0,1] and invert sign to have yellow at the center
+    # generate backward plots
+    k_idx = [20,15,10,5,0]
+    fig, axs = plt.subplots(nrows=2, ncols=len(k_idx), figsize=(20,10))
+    for i,k in enumerate(k_idx):
+        Xk = dsb.cache[k].cpu()
+        ax = axs[0,i]
+        ax.scatter(*Xk.T, c=distance, cmap="viridis", s=1)
+        # ax.set_title(f"k={k}/20")
+        ax.axis(False)
+
+    # forward
+    dsb.load_model('alpha', n)
+    dsb.init_cache()
+    dsb.refresh_cache("beta")
+    X0 = dsb.cache[0].cpu()
+    X0_mean = X0.mean(dim=0)
+    distance = (X0-X0_mean.view(1,-1)).pow(exponent=2).sum(dim=1)
+    distance = 1 - distance / distance.max() # normalize to [0,1] and invert sign to have yellow at the center
+    # generate forward plots
+    for i,k in enumerate(k_idx):
+        Xk = dsb.cache[k].cpu()
+        ax = axs[1,i]
+        ax.scatter(*Xk.T, c=distance, cmap="viridis", s=1)
+        # ax.set_title(f"k={k}/20")
+        ax.axis(False)
+
+    plt.show()

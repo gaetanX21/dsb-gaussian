@@ -54,12 +54,12 @@ class CachedDSB(nn.Module):
 
         # instantiate f and b
         self.type_to_net = {"alpha": "f", "beta": "b"} # just for clarity
-        self.memory_summary("Before initializing f & b")
+        # self.memory_summary("Before initializing f & b")
         self.nets = {
             "f": model(init_zero=True, max_len=N+1).to(device), # forward network, parametrized by alpha
             "b": model(max_len=N+1).to(device) # backward network, parametrized by beta
         }
-        self.memory_summary("After initializing f & b")
+        # self.memory_summary("After initializing f & b")
         if self.use_ema:
             self.ema = EMA(self.nets["f"])
         self.save_weights('alpha', 0) # initialize alpha_0 as 0 --> useless but ok
@@ -151,9 +151,9 @@ class CachedDSB(nn.Module):
         """
         net = self.type_to_net[type]
         self.logger.debug(f"Getting optimizer {self.optim.__name__} for {net}")
-        self.memory_summary("Before loading optimizer")
+        # self.memory_summary("Before loading optimizer")
         self.optimizer = self.optim(self.nets[net].parameters(), lr=self.lr)
-        self.memory_summary("After loading optimizer")
+        # self.memory_summary("After loading optimizer")
 
     def set_ema(self, type: str) -> EMA:
         """
@@ -164,11 +164,11 @@ class CachedDSB(nn.Module):
         self.ema = EMA(self.nets[net])
 
     def init_cache(self):
-        self.memory_summary(f"Initializing cache")
+        # self.memory_summary(f"Initializing cache")
         self.cache = torch.zeros((self.N+1, self.cache_size, *self.data_shape), device=self.device)
         self.Z = torch.zeros((self.N, self.cache_size, *self.data_shape), device=self.device)
         self.ones = torch.ones((self.cache_size,), dtype=torch.int, device=self.device)
-        self.memory_summary(f"After cache init")
+        # self.memory_summary(f"After cache init")
 
     def train_model(self):
         """
@@ -209,7 +209,7 @@ class CachedDSB(nn.Module):
         if self.use_ema:
             self.set_ema(type) # EMA for network
         for step in range(self.n_epoch):
-            self.memory_summary(title=f"{type}_{n} step {step}/{self.n_epoch}")
+            # self.memory_summary(title=f"{type}_{n} step {step}/{self.n_epoch}")
             if step % self.cache_period == 0:
                 self.refresh_cache(type)
             k, Xk, Xkp = self.sample_cache()
@@ -222,7 +222,7 @@ class CachedDSB(nn.Module):
         type alpha = we generate reverse paths using b
         """
         self.logger.debug(f'Refreshing cache of type {type}')
-        self.memory_summary("Before refreshing cache")
+        # self.memory_summary("Before refreshing cache")
         X, Z, ones = self.cache, self.Z, self.ones # for naming simplicity
         Z.normal_() # refresh Z with N(0,1) values!
         if type=="beta":
@@ -246,21 +246,21 @@ class CachedDSB(nn.Module):
                     for k in range(self.N, 0, -1):
                         X[k-1] = self.nets["b"](X[k], k*ones) + math.sqrt(2*self.gamma[k]) * Z[k-1]
         # self.generate_path(type, M=self.cache_size, cache_mode=True) # refresh cache
-        self.memory_summary("After refreshing cache")
+        # self.memory_summary("After refreshing cache")
         torch.cuda.empty_cache()
-        self.memory_summary("After calling torch.cuda.empty_cache() cache")
+        # self.memory_summary("After calling torch.cuda.empty_cache() cache")
 
     def gradient_step(self, type: str, k: torch.IntTensor, Xk: torch.Tensor, Xkp: torch.Tensor):
         """
         Performs a gradient step on the model for type (alpha or beta) on the selected points X_{k(j)}^j using the optimizer and batch_size.
         """
         self.optimizer.zero_grad()
-        self.memory_summary("before compute loss")
+        # self.memory_summary("before compute loss")
         loss = self.compute_loss(type, k, Xk, Xkp)
-        self.memory_summary("after compute loss")
+        # self.memory_summary("after compute loss")
         loss.backward()
         self.optimizer.step() # weights update --> frees a lot of Memory Allocated since the gradients can be thrown away
-        self.memory_summary("after optim.step()")
+        # self.memory_summary("after optim.step()")
         if self.use_ema:
             self.ema.update(self.nets[self.type_to_net[type]]) # weights_EMA update too!
 
