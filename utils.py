@@ -9,7 +9,7 @@ from os.path import join
 import yaml
 from scipy.linalg import sqrtm
 from torch.linalg import matrix_norm
-import subprocess
+import sys
 
 
 def plot_path_2d(path: np.ndarray, t: np.ndarray) -> None:
@@ -254,11 +254,20 @@ def plot_perf(parent_dir: str, exp: str, L: int=20, direction: str="reverse", M:
     plt.show()
 
 def create_sweep(sweep_dir: str, N: int, dim: int, cov_type: str):
-    for i in range(N):
-        name = f"{dim}d_{i}_{cov_type}"
-        cmd = f"python main.py --parent_dir {sweep_dir} --dataset {dim}d --name {name} --cov_type {cov_type} --cov_seed {i} --config_only"
-        os.system(cmd)
-    print(f"Sweep {sweep_dir} created successfully.")
+    try:
+        for i in range(N):
+            name = f"{dim}d_{i}_{cov_type}"
+            cmd = f"python main.py --parent_dir {sweep_dir} --dataset {dim}d --name {name} --cov_type {cov_type} --cov_seed {i} --config_only"
+            os.system(cmd)
+        print(f"Sweep {sweep_dir} created successfully.")
+    except KeyboardInterrupt:
+        print("Interrupted")
+        sys.exit(0)
+
+def create_sweeps(N: int, dim: int):
+    sweep_dir = f"sweeps/gaussian/{dim}d"
+    for cov_type in ["spherical", "diagonal", "general"]:
+        create_sweep(sweep_dir, N, dim, cov_type)
 
 def assess_performance_sweep(sweep_dir: str, L: int, cov_type: str, M: int=250_000, direction: str="reverse", rel: bool=False) -> tuple:
     exps = [exp for exp in os.listdir(sweep_dir) if os.path.isdir(join(sweep_dir, exp))]
@@ -274,7 +283,6 @@ def assess_performance_sweep(sweep_dir: str, L: int, cov_type: str, M: int=250_0
         dsb = models.CachedDSB.from_config(config_file, None)
         Sigma_error[i], Sigma_prime_error[i], C_error[i] = assess_performance(dsb, L, M, direction, rel)
     return Sigma_error, Sigma_prime_error, C_error
-
 
 def plot_error(error: torch.Tensor, rank: bool=False, normalize: bool=False, ylabel: str=None):
     """
@@ -296,7 +304,6 @@ def plot_error(error: torch.Tensor, rank: bool=False, normalize: bool=False, yla
     plt.title("Mean Error over DSB iterations")
     plt.show()
 
-
 def clean_error(error: torch.Tensor, rank: bool=False, normalize: bool=False):
     """
     Computes the error over DSB iterations.
@@ -310,16 +317,17 @@ def clean_error(error: torch.Tensor, rank: bool=False, normalize: bool=False):
     mean, std = error.mean(dim=1), error.std(dim=1)
     return error, mean, std
 
-
-def save_res(cov_type: str, L: int=20, M: int=250_000, rank: bool=False, normalize: bool=False):
-    dims = [1,5] #,50]
+def save_res(cov_type: str, dims: list[int], L: int=20, M: int=25_000, rank: bool=False, normalize: bool=False):
     res = {}
     colors = ["red", "green", "blue"]
     symbols = [r"\Sigma", r"\Sigma'", "C"]
+    base_dir = f"results/gaussian/{cov_type}" # where we'll save the images
+    if not os.path.isdir(base_dir):
+        os.makedirs(base_dir)
     x = list(range(L))
     print('#'*42 + '\n' + f'Dealing with cov_type={cov_type}')
     for i, d in enumerate(dims):
-        sweep_dir = f"sweeps/g{d}_{cov_type[:3]}"
+        sweep_dir = f"sweeps/gaussian/{d}d" # NEW CONVENTION
         errors = assess_performance_sweep(sweep_dir, L, cov_type, M)
         res[d] = dict(zip(symbols,errors))
     
@@ -327,14 +335,16 @@ def save_res(cov_type: str, L: int=20, M: int=250_000, rank: bool=False, normali
         plt.figure(dpi=150)
         for j, d in enumerate(dims):
             error, mean, std = clean_error(res[d][symbol], rank, normalize)
-            plt.errorbar(x, mean, std, fmt="o-", color=colors[j], label=f"d={d}", capsize=6)
+            plt.plot(x, mean, "o-", color=colors[j], label=f"d={d}")
+            plt.fill_between(x, mean-std, mean+std, alpha=0.25, color=colors[j])
+            # plt.errorbar(x, mean, std, fmt="o-", color=colors[j], label=f"d={d}", capsize=6)
         plt.xlabel("DSB iteration $n$")
         plt.xticks(x[::5])
-        plt.ylabel(r"$||\hat{" + symbol + r"}-" + symbol + r"||^2_F$")
+        plt.ylabel(r"$||\hat{" + symbol + r"_n}-" + symbol + r"||^2_F$")
         plt.legend()
         plt.title(f"Error over DSB iteration ({cov_type})")
         s = symbol.strip("\\")
-        fname = f"results/gaussian/{cov_type}/{s}_M={M}"
+        fname = join(base_dir,f"{s}_{M}")
         if normalize:
             fname += "_normalize"
         if rank:
@@ -342,3 +352,7 @@ def save_res(cov_type: str, L: int=20, M: int=250_000, rank: bool=False, normali
         fname += ".png"
         plt.savefig(fname)
         print(f"Saved {fname}")
+
+def save_res_multi(dims: list[int]=[1,5,10], L: int=20, M: int=25_000, rank: bool=False, normalize: bool=False):
+    for cov_type in ["spherical", "diagonal", "general"]:
+        save_res(cov_type, dims, L, M, rank, normalize)
