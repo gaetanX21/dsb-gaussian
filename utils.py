@@ -262,9 +262,12 @@ def create_sweep(sweep_dir: str, N: int, dim: int, cov_type: str):
 
 def assess_performance_sweep(sweep_dir: str, L: int, cov_type: str, M: int=250_000, direction: str="reverse", rel: bool=True) -> tuple:
     exps = [exp for exp in os.listdir(sweep_dir) if os.path.isdir(join(sweep_dir, exp))]
+    print(f"Found {len(exps)} folders in {sweep_dir}")
     exps = [exp for exp in exps if exp.endswith(cov_type)]
+    print(f"{len(exps)} folders after filtering on {cov_type}")
+    exps = [exp for exp in exps if os.path.exists(join(sweep_dir, exp, "status.yaml"))]
     n_exp = len(exps)
-    print(f"Found {n_exp} exps in {sweep_dir} for cov_type {cov_type}")
+    print(f"{n_exp} exps after filtering on status.yaml file too")
     Sigma_error, Sigma_prime_error, C_error = torch.zeros((n_exp,L)), torch.zeros((n_exp,L)), torch.zeros((n_exp,L))
     for i, exp in enumerate(exps):
         config_file = join(sweep_dir, exp, "config.yaml")

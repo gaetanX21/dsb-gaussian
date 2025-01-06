@@ -3,7 +3,7 @@ import asyncio
 import os
 from os.path import join
 import argparse
-from secret import USER, PSWD, HOSTS, PROJECT_DIR
+from secret import USER, PSWD, AVAILABLE_HOSTS, PROJECT_DIR
 
 
 active_connections = []
@@ -15,7 +15,8 @@ async def distribute_tasks(exp_dir: str):
     exp2host = {}
     i = 0
     tasks_to_run = []
-    for host in HOSTS:
+    used_hosts = [] # hosts we're going to use
+    for host in AVAILABLE_HOSTS:
         try:
             exp = exps[i]
             config_file = join(exp_dir, exp, "config.yaml")
@@ -25,6 +26,7 @@ async def distribute_tasks(exp_dir: str):
             exp2host[exp] = host
             tasks_to_run.append(run_on_host(host, config_file))
             print(f'Experiment {exp} successfully attributed to host {host}')
+            used_hosts.append(host)
             i += 1 # moving on to next task
         except Exception as e:
             print(f'Caught exception on host {host}, trying next server\nException caught: {e}')
@@ -36,6 +38,7 @@ async def distribute_tasks(exp_dir: str):
     if i<n_config:
         print("Some tasks have not been distributed.")
 
+    lock_hosts(used_hosts)
     await asyncio.gather(*tasks_to_run)
 
 
@@ -62,6 +65,7 @@ async def run_on_host(host, config_file: str):
         print(f"Caught exception on {host}: {e}")
     finally:
         if conn:
+            free_hosts([host])
             conn.close()
 
 
@@ -88,3 +92,25 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print('Forced shutdown')
+
+
+def free_hosts(hosts: list[str]):
+    """
+    Makes the hosts available by removing them from used_hosts.txt
+    """
+    with open("used_hosts.txt", "r") as f:
+        used_hosts = [line.strip("\n") for line in f.readlines()]
+    used_hosts = [host for host in used_hosts if host not in hosts]
+    with open("used_hosts.txt", "w") as f:
+        for host in hosts:
+            f.write(host+"\n")
+    print(f"Removed {len(hosts)} hosts from used_hosts.txt")
+
+def lock_hosts(hosts: list[str]):
+    """
+    Maks the hosts unavailable by adding them to used_hosts.txt
+    """
+    with open("used_hosts.txt", "a") as f:
+        for host in hosts:
+            f.write(host+"\n")
+        print(f'Wrote {len(hosts)} hosts to used_hosts.txt')
