@@ -309,3 +309,35 @@ def clean_error(error: torch.Tensor, rank: bool=False, normalize: bool=False):
         error = torch.argsort(error, dim=0).float()
     mean, std = error.mean(dim=1), error.std(dim=1)
     return error, mean, std
+
+
+def save_res(cov_type: str, L: int=20, M: int=250_000, rank: bool=False, normalize: bool=False):
+    dims = [1,5,50]
+    res = {}
+    colors = ["red", "green", "blue"]
+    symbols = [r"\Sigma", r"\Sigma'", "C"]
+    print('#'*42 + '\n' + f'Dealing with cov_type={cov_type}')
+    for i, d in enumerate(dims):
+        sweep_dir = f"sweeps/g{d}_{cov_type[:3]}"
+        errors = assess_performance_sweep(sweep_dir, L, cov_type, M)
+        res[d] = dict(zip(symbols,errors))
+    
+    for i, symbol in enumerate(symbols):
+        plt.figure(dpi=150)
+        for j, d in enumerate(dims):
+            error, mean, std = clean_error(res[d][symbol], rank, normalize)
+            plt.errorbar(x, mean, std, fmt="o-", color=colors[j], label=f"d={d}", capsize=6)
+        plt.xlabel("DSB iteration $n$")
+        plt.xticks(x[::5])
+        plt.ylabel(r"$||\hat{" + symbol + r"}-" + symbol + r"||^2_F$")
+        plt.legend()
+        plt.title(f"Error over DSB iteration ({cov_type})")
+        s = symbol.strip("\\")
+        fname = f"results/gaussian/{s}_{cov_type}_M={M}"
+        if normalize:
+            fname += "_normalize"
+        if rank:
+            fname += "_rank"
+        fname += ".png"
+        plt.savefig(fname)
+        print(f"Saved {fname}")
