@@ -5,3 +5,4 @@ __pycache__
 hosts.txt
 used_hosts.txt
 secret.py
+results/

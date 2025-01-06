@@ -316,6 +316,7 @@ def save_res(cov_type: str, L: int=20, M: int=250_000, rank: bool=False, normali
     res = {}
     colors = ["red", "green", "blue"]
     symbols = [r"\Sigma", r"\Sigma'", "C"]
+    x = list(range(L))
     print('#'*42 + '\n' + f'Dealing with cov_type={cov_type}')
     for i, d in enumerate(dims):
         sweep_dir = f"sweeps/g{d}_{cov_type[:3]}"
@@ -333,7 +334,7 @@ def save_res(cov_type: str, L: int=20, M: int=250_000, rank: bool=False, normali
         plt.legend()
         plt.title(f"Error over DSB iteration ({cov_type})")
         s = symbol.strip("\\")
-        fname = f"results/gaussian/{s}_{cov_type}_M={M}"
+        fname = f"results/gaussian/{cov_type}/{s}_M={M}"
         if normalize:
             fname += "_normalize"
         if rank:
