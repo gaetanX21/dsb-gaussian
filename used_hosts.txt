@@ -4,7 +4,6 @@ venturi.polytechnique.fr
 temporal.polytechnique.fr
 silure.polytechnique.fr
 malleole.polytechnique.fr
-rolls.polytechnique.fr
 coccyx.polytechnique.fr
 sternum.polytechnique.fr
 saone.polytechnique.fr
@@ -16,7 +15,6 @@ xiphoide.polytechnique.fr
 somme.polytechnique.fr
 brochet.polytechnique.fr
 jaguar.polytechnique.fr
-chrysler.polytechnique.fr
 bugatti.polytechnique.fr
 tarse.polytechnique.fr
 thon.polytechnique.fr
@@ -25,7 +23,6 @@ anguille.polytechnique.fr
 rouget.polytechnique.fr
 murene.polytechnique.fr
 ablette.polytechnique.fr
-royce.polytechnique.fr
 renault.polytechnique.fr
 gymnote.polytechnique.fr
 espagne.polytechnique.fr
@@ -40,18 +37,14 @@ rotule.polytechnique.fr
 radius.polytechnique.fr
 pleione.polytechnique.fr
 gardon.polytechnique.fr
-pontiac.polytechnique.fr
 astragale.polytechnique.fr
 skoda.polytechnique.fr
 phalange.polytechnique.fr
 humerus.polytechnique.fr
 piranha.polytechnique.fr
 lieu.polytechnique.fr
-niva.polytechnique.fr
-peugeot.polytechnique.fr
 moselle.polytechnique.fr
 sacrum.polytechnique.fr
-bentley.polytechnique.fr
 volvo.polytechnique.fr
 raie.polytechnique.fr
 vendee.polytechnique.fr
@@ -61,7 +54,6 @@ simca.polytechnique.fr
 parietal.polytechnique.fr
 femur.polytechnique.fr
 requin.polytechnique.fr
-cadillac.polytechnique.fr
 lada.polytechnique.fr
 labre.polytechnique.fr
 cuboide.polytechnique.fr
@@ -70,7 +62,6 @@ acromion.polytechnique.fr
 apophyse.polytechnique.fr
 cubitus.polytechnique.fr
 perone.polytechnique.fr
-ford.polytechnique.fr
 barbue.polytechnique.fr
 atlas.polytechnique.fr
 cote.polytechnique.fr
@@ -80,4 +71,3 @@ anchois.polytechnique.fr
 porsche.polytechnique.fr
 mulet.polytechnique.fr
 metacarpe.polytechnique.fr
-rover.polytechnique.fr
