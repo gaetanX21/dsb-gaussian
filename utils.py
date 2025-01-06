@@ -317,7 +317,7 @@ def clean_error(error: torch.Tensor, rank: bool=False, normalize: bool=False):
     mean, std = error.mean(dim=1), error.std(dim=1)
     return error, mean, std
 
-def save_res(cov_type: str, dims: list[int], L: int=20, M: int=25_000, rank: bool=False, normalize: bool=False):
+def save_res(cov_type: str, dims: list[int], L: int=20, M: int=25_000, rank: bool=False, normalize: bool=False, title: bool=False):
     res = {}
     colors = ["red", "green", "blue"]
     symbols = [r"\Sigma", r"\Sigma'", "C"]
@@ -332,7 +332,7 @@ def save_res(cov_type: str, dims: list[int], L: int=20, M: int=25_000, rank: boo
         res[d] = dict(zip(symbols,errors))
     
     for i, symbol in enumerate(symbols):
-        plt.figure(dpi=150)
+        plt.figure(figsize=(10,5), dpi=150)
         for j, d in enumerate(dims):
             error, mean, std = clean_error(res[d][symbol], rank, normalize)
             plt.plot(x, mean, "o-", color=colors[j], label=f"d={d}")
@@ -342,7 +342,8 @@ def save_res(cov_type: str, dims: list[int], L: int=20, M: int=25_000, rank: boo
         plt.xticks(x[::5])
         plt.ylabel(r"$||\hat{" + symbol + r"_n}-" + symbol + r"||^2_F$")
         plt.legend()
-        plt.title(f"Error over DSB iteration ({cov_type})")
+        if title:
+            plt.title(f"Error over DSB iteration ({cov_type})")
         s = symbol.strip("\\")
         fname = join(base_dir,f"{s}_{M}")
         if normalize:
