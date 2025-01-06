@@ -24,7 +24,7 @@ def monitor_tasks(sweep_dir: str, interval: int):
                     status = yaml.safe_load(f)
             except Exception as e:
                 # print(f'Caught exception: {e}')
-                status = {"host": "?", "gpu_name": "unknown", "gpu_mem": "unknown", "ipf_step": "?", "time_elapsed": 0, "status": "?"}
+                status = {"host": "?", "gpu_name": "?", "gpu_mem": "?", "ipf_step": "?", "time_elapsed": 0, "status": "?"}
             
             # Extract fields from the status line
             host = colored(status["host"], "green")

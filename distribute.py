@@ -6,6 +6,35 @@ import argparse
 from secret import USER, PSWD, AVAILABLE_HOSTS, PROJECT_DIR
 
 
+def free_hosts(hosts: list[str]):
+    """
+    Makes the hosts available by removing them from used_hosts.txt
+    """
+    with open("used_hosts.txt", "r") as f:
+        used_hosts = [line.strip("\n") for line in f.readlines()]
+    n_used = len(used_hosts)
+    used_hosts = [host for host in used_hosts if host not in hosts]
+    n_removed = n_used - len(used_hosts)
+    with open("used_hosts.txt", "w") as f:
+        for host in used_hosts:
+            f.write(host+"\n")
+    print(f"Removed {n_removed} hosts from used_hosts.txt")
+
+def lock_hosts(hosts: list[str]):
+    """
+    Maks the hosts unavailable by adding them to used_hosts.txt
+    """
+    with open("used_hosts.txt", "r") as f:
+        used_hosts = [line.strip("\n") for line in f.readlines()]
+    n_used = len(used_hosts)
+    used_hosts = list(set(used_hosts+hosts)) # quick union
+    n_added = len(used_hosts) - n_used
+    with open("used_hosts.txt", "w") as f:
+        for host in used_hosts:
+            f.write(host+"\n")
+        print(f'Added {n_added} hosts to used_hosts.txt')
+
+
 active_connections = []
 
 async def distribute_tasks(exp_dir: str):
@@ -92,25 +121,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print('Forced shutdown')
-
-
-def free_hosts(hosts: list[str]):
-    """
-    Makes the hosts available by removing them from used_hosts.txt
-    """
-    with open("used_hosts.txt", "r") as f:
-        used_hosts = [line.strip("\n") for line in f.readlines()]
-    used_hosts = [host for host in used_hosts if host not in hosts]
-    with open("used_hosts.txt", "w") as f:
-        for host in hosts:
-            f.write(host+"\n")
-    print(f"Removed {len(hosts)} hosts from used_hosts.txt")
-
-def lock_hosts(hosts: list[str]):
-    """
-    Maks the hosts unavailable by adding them to used_hosts.txt
-    """
-    with open("used_hosts.txt", "a") as f:
-        for host in hosts:
-            f.write(host+"\n")
-        print(f'Wrote {len(hosts)} hosts to used_hosts.txt')

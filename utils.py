@@ -183,14 +183,14 @@ def plot_image(path: torch.Tensor):
 
 #################################################################
 
-def error(estimator: torch.Tensor, reference: torch.Tensor, rel: bool=True) -> float:
+def error(estimator: torch.Tensor, reference: torch.Tensor, rel: bool) -> float:
     if rel:
         err = matrix_norm(estimator-reference) / matrix_norm(reference)
     else:
         err = matrix_norm(estimator-reference)
     return err
 
-def assess_performance(dsb: models.CachedDSB, L: int, M: int=250_000, direction: str="reverse", rel: bool=True) -> tuple:
+def assess_performance(dsb: models.CachedDSB, L: int, M: int, direction: str, rel: bool) -> tuple:
     Sigma, Sigma_prime = dsb.pdata.Sigma, dsb.pprior.Sigma
     sigma2 = 2 * dsb.N * dsb.gamma
     C = get_C(Sigma, Sigma_prime, sigma2)
