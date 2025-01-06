@@ -5,10 +5,6 @@ from sklearn.datasets import make_circles, make_moons
 from abc import ABC, abstractmethod
 from PIL import Image
 from os.path import join
-from torch.utils.data import Dataset
-import torchvision
-from torchvision import transforms
-from torch.utils.data import Dataset, DataLoader
 
 
 # Abstract base class
@@ -147,20 +143,4 @@ def config_to_p(pconfig: dict) -> DataSampler:
         raise ValueError(f'Invalid p type. pconfig={pconfig}') 
     return p
 
-def random_L(cov_type: str, dim: int) -> torch.Tensor:
-    """Sigma=LL^T (Cholesky decomposition) and L is sampled randomly based on cov_type"""
-    if cov_type == "spherical":
-        std = torch.rand((1,))
-        L = std * torch.eye(dim)
-    elif cov_type == "diagonal":
-        sigma_i = torch.rand((dim,))
-        L = torch.diag(sigma_i)
-    elif cov_type == "general":
-        Z = torch.randn((dim,dim))
-        svd = torch.linalg.svd(Z)
-        O = svd[0] @ svd[2] # random orthogonal matrix
-        sigma_i = torch.rand((dim,))
-        L = O @ torch.diag(sigma_i) # L=O@D^(1/2) such that Sigma = O@D^O.T
-    else:
-        raise ValueError(f'Invalid cov_type {cov_type}') 
-    return L
+
