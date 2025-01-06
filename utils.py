@@ -260,17 +260,52 @@ def create_sweep(sweep_dir: str, N: int, dim: int, cov_type: str):
         os.system(cmd)
     print(f"Sweep {sweep_dir} created successfully.")
 
-def assess_performance_sweep(sweep_dir: str, L: int, cov_type: str, M: int=250_000, direction: str="reverse", rel: bool=True) -> tuple:
+def assess_performance_sweep(sweep_dir: str, L: int, cov_type: str, M: int=250_000, direction: str="reverse", rel: bool=False) -> tuple:
     exps = [exp for exp in os.listdir(sweep_dir) if os.path.isdir(join(sweep_dir, exp))]
-    print(f"Found {len(exps)} folders in {sweep_dir}")
+    print(f"{len(exps)} folders in {sweep_dir}")
     exps = [exp for exp in exps if exp.endswith(cov_type)]
-    print(f"{len(exps)} folders after filtering on {cov_type}")
-    exps = [exp for exp in exps if os.path.exists(join(sweep_dir, exp, "status.yaml"))]
+    print(f"{len(exps)} folders after filtering on cov_type={cov_type}")
+    exps = [exp for exp in exps if os.path.exists(join(sweep_dir, exp, "weights", f"beta_{L-1}.pt"))]
     n_exp = len(exps)
-    print(f"{n_exp} exps after filtering on status.yaml file too")
+    print(f"{n_exp} exps after filtering on existence of beta_{L-1}.pt")
     Sigma_error, Sigma_prime_error, C_error = torch.zeros((n_exp,L)), torch.zeros((n_exp,L)), torch.zeros((n_exp,L))
     for i, exp in enumerate(exps):
         config_file = join(sweep_dir, exp, "config.yaml")
         dsb = models.CachedDSB.from_config(config_file, None)
         Sigma_error[i], Sigma_prime_error[i], C_error[i] = assess_performance(dsb, L, M, direction, rel)
     return Sigma_error, Sigma_prime_error, C_error
+
+
+def plot_error(error: torch.Tensor, rank: bool=False, normalize: bool=False, ylabel: str=None):
+    """
+    Plots the error over DSB iterations.
+    error of shape (n_exp,L)
+    """
+    error, mean, std = clean_error(error, rank, normalize)
+    x = range(len(mean))
+
+    plt.figure(dpi=150)
+    plt.errorbar(x, mean, std, fmt='o-', capsize=6)
+    plt.plot(error, alpha=0.25)
+
+    plt.xlabel("DSB iteration $n$")
+    plt.xticks(x[::5])
+    if ylabel is None:
+        ylabel = f"Error (rank={rank}, normalize={normalize})"
+    plt.ylabel(ylabel)
+    plt.title("Mean Error over DSB iterations")
+    plt.show()
+
+
+def clean_error(error: torch.Tensor, rank: bool=False, normalize: bool=False):
+    """
+    Computes the error over DSB iterations.
+    error of shape (n_exp,L)
+    """
+    error = error.T.clone() # to make sure we don't modify the original tensor
+    if normalize:
+        error = error / error[0]
+    if rank:
+        error = torch.argsort(error, dim=0).float()
+    mean, std = error.mean(dim=1), error.std(dim=1)
+    return error, mean, std
