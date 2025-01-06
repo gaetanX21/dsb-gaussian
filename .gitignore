@@ -6,3 +6,4 @@ hosts.txt
 used_hosts.txt
 secret.py
 results/
+*.ipynb
