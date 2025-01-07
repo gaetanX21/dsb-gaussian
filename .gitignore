@@ -7,3 +7,4 @@ secret.py
 used_hosts.txt
 results/
 *.ipynb
+data/
