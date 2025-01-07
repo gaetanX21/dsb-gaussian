@@ -105,7 +105,7 @@ def animation_bridge(X: torch.Tensor, reverse: bool=True, filename: str=None, in
             sc.set_offsets(X[frame])
             return sc,      
 
-    ax.set_title('reverse diffusion' if reverse else 'forward diffusion')
+    # ax.set_title('reverse diffusion' if reverse else 'forward diffusion')
     ax.axis(False)
     ani = FuncAnimation(fig, update, frames=X.shape[0], interval=interval, blit=True)
     filename = "bridge" if filename is None else filename
