@@ -1,3 +1,8 @@
+# This script defines the Cached Diffusion Schrödinger Bridge (DSB) model as proposed by De Bortoli et al.
+# It includes the `CachedDSB` class which implements the model using PyTorch.
+# The class constructor initializes various parameters, sets up logging, and prepares the model for training.
+# The script imports necessary libraries and modules for neural network operations, optimization, data handling, and logging.
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

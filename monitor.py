@@ -1,3 +1,7 @@
+# This script monitors the progress of experiments in a specified sweep directory.
+# It periodically checks the status of each experiment and displays the information in a tabular format.
+# The script imports necessary libraries and modules for file handling, argument parsing, and terminal output formatting.
+
 import os
 import time
 from os.path import join

@@ -1,3 +1,8 @@
+# This script sets up a logging system with both console and file handlers.
+# It defines a `ColorFormatter` class to add color to console log messages based on their severity level.
+# The `setup_logger` function configures a logger with the specified name, verbosity level, and log file.
+# The logger outputs colored messages to the console and plain messages to a log file.
+
 import logging
 from os.path import join
 

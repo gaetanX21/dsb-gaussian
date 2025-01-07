@@ -1,3 +1,8 @@
+# This script defines a function `get_args` that uses the argparse library to parse command-line arguments 
+# for training the Diffusion Schrödinger Bridge (DSB) model. The arguments include options for specifying 
+# a configuration file, SSH host, verbosity levels, dataset name, experiment name, parent directory, 
+# number of IPF iterations, number of steps, step sizes, number of epochs, and cache size.
+
 import argparse
 
 
@@ -13,13 +18,13 @@ def get_args():
     group_verbosity.add_argument("-d", "--debug", action="store_true", help="run program in debug mode")
     group_verbosity.add_argument("-q", "--quiet", action="store_true", help="run program in quiet mode")
 
-    parser.add_argument("--dataset", required=True, help="experiment's name (config+weights+log will be stored in experiments/name/ folder)")
+    parser.add_argument("--dataset", required=True, help="name of dataset ('2d' or '{n}d' or 'mnist')")
     parser.add_argument("--name", required=True, help="experiment's name (config+weights+log will be stored in experiments/name/ folder)")
     parser.add_argument("--parent_dir", default="experiments", help="parent directory to store the results (will be stored in directory/name)")
-    parser.add_argument("-L", type=int, default=20, help="number of IPF iterations")
+    parser.add_argument("-L", type=int, default=20, help="number of IPF iterations (i.e. DSB iterations)")
     parser.add_argument("-N", type=int, default=20, help="number of steps from pdata to pprior i.e. length of bridges")
-    parser.add_argument("--gamma0", type=float, default=5e-4, help="step size used for sampling, such that T=gamma*N")
-    parser.add_argument("--gamma_bar", type=float, default=5e-4, help="step size used for sampling, such that T=gamma*N")
+    parser.add_argument("--gamma0", type=float, default=5e-4, help="minimum step size")
+    parser.add_argument("--gamma_bar", type=float, default=5e-4, help="maximum step size")
     parser.add_argument("--n_epoch", type=int, default=20_000, help="number of epochs for each IPF iteration")
     parser.add_argument("--cache_size", type=int, default=10_000, help="size of the cache used during training")
     parser.add_argument("--cache_period", type=int, default=1_000, help="number of epochs between each cache renewal")

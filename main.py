@@ -1,3 +1,7 @@
+# This script serves as the entry point for training the Diffusion Schrödinger Bridge (DSB) model.
+# It parses command-line arguments, sets up logging, and initializes the training process.
+# The script imports necessary modules for model handling, argument parsing, logging, and configuration management.
+
 import models
 import torch
 import argloader
@@ -5,6 +9,7 @@ import logloader
 import logging
 import config
 import os
+
 
 def main():
     # parse arguments

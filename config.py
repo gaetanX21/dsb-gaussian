@@ -1,3 +1,8 @@
+# This script defines a function `save_config` that saves the configuration of the Diffusion Schrödinger Bridge (DSB) model 
+# training process to a YAML file. The configuration includes general settings, pdata settings, pprior settings, and model settings.
+# The function takes command-line arguments and the device information as inputs and organizes them into a dictionary format 
+# suitable for saving to a YAML file.
+
 from os.path import join
 import yaml
 

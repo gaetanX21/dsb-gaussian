@@ -1,66 +1,15 @@
+# This script provides utility functions for visualizing the Diffusion Schrödinger Bridge (DSB) model.
+# It includes functions to plot and animate the diffusion process, both forward and reverse.
+# The `plot_bridge` function plots the "bridge" from p_prior to p_data or vice versa.
+# The `animation_bridge` function creates an animation of the diffusion process.
+# The script imports necessary libraries and modules for data handling and visualization.
+
 import matplotlib.pyplot as plt
-from matplotlib.collections import LineCollection
 from matplotlib.animation import FuncAnimation
-import numpy as np
 import torch
 import models
 import os
 from os.path import join
-import gc
-
-
-def plot_path_2d(path: np.ndarray, t: np.ndarray) -> None:
-    x, y = path.T
-    a, b = path[0], path[-1]
-    points = np.array([x, y]).T.reshape(-1, 1, 2)
-    segments = np.concatenate([points[:-1], points[1:]], axis=1)
-
-    lc = LineCollection(segments, cmap='viridis', norm=plt.Normalize(t.min(), t.max()))
-    lc.set_array(t)
-    lc.set_linewidth(2)
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.add_collection(lc)
-    ax.scatter(*a, color='red', marker='*', s=100, zorder=3, label="a")
-    ax.scatter(*b, color='blue', marker='*', s=100, zorder=3, label="b")
-    ax.autoscale()
-    xmin, xmax = min(x), max(x)
-    ymin, ymax = min(y), max(y)
-    xrange, yrange = xmax-xmin, ymax-ymin
-    padding = 0.2
-    ax.set_xlim(xmin-padding*xrange, xmax+padding*xrange)
-    ax.set_ylim(ymin-padding*yrange, ymax+padding*yrange)
-    plt.colorbar(lc, ax=ax, label='Time')
-    plt.title("2D Path Colored by Time")
-    plt.xlabel("X")
-    plt.ylabel("Y")
-    plt.grid(None)
-    plt.legend()
-    plt.show()
-
-
-def animation_sb_gaussian(Z: np.ndarray, T: float=10*1000) -> FuncAnimation:
-    """
-    Create an animation of a dynamic Schrödinger bridge given a set of paths Z.
-    T is the animation duration. (default: 10 seconds)
-    """
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.scatter(Z[:,0,0], Z[:,0,1], c='red', label=r'$\mathbf{x}_0 \sim \nu_0$')
-    ax.scatter(Z[:,-1,0], Z[:,-1,1], c='blue', label=r'$\mathbf{x}_N \sim \nu_1$')
-    sc = ax.scatter(Z[:,0,0], Z[:,0,1], c='grey', label = r'$\mathbf{x}_k$')
-    ax.set_title("Dynamic Schrödinger Bridge")
-    ax.set_xlabel("X")
-    ax.set_ylabel("Y")
-    ax.legend()
-
-    def update(frame):
-        sc.set_offsets(Z[:,frame,:])
-        return sc,
-
-    N = Z.shape[1]
-    ani = FuncAnimation(fig, update, frames=N, blit=True)
-    plt.close()
-    return ani
 
 
 def plot_bridge(X: torch.Tensor, reverse: bool=True, title: str=None, ax=None, **kwargs):

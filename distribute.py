@@ -1,3 +1,8 @@
+# This script distributes tasks for running experiments on multiple hosts using the Fabric library.
+# It defines an asynchronous function `distribute_tasks` that scans a directory for experiment configurations,
+# assigns each experiment to a host, and runs the experiments concurrently on the assigned hosts.
+# The script imports necessary libraries and modules for remote connection, asynchronous execution, and file handling.
+
 import fabric
 import asyncio
 import os

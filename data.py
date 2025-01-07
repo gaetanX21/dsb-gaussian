@@ -1,14 +1,15 @@
-# uses code from https://github.com/JTT94/diffusion_schrodinger_bridge file bridge/data/two_dim.py
+# This script defines various classes and functions for data sampling and loading, specifically for the Diffusion Schrödinger Bridge (DSB) model.
+# It includes an abstract base class `DataSampler` and a concrete implementation `GaussianSampler` for generating Gaussian-distributed samples.
+# The script also imports necessary libraries and modules for data handling and transformation, such as numpy, torch, sklearn, PIL, and torchvision.
+
 import numpy as np
 import torch
 from sklearn.datasets import make_circles, make_moons
 from abc import ABC, abstractmethod
 from PIL import Image
 from os.path import join
-from torch.utils.data import Dataset
 import torchvision
 from torchvision import transforms
-from torch.utils.data import Dataset, DataLoader
 
 
 # Abstract base class

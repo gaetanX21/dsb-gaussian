@@ -1,3 +1,7 @@
+# This script defines a class `EMA` (Exponential Moving Average) for maintaining a moving average of model parameters.
+# The `EMA` class is used to stabilize training by smoothing the updates to the model's parameters.
+# It includes methods to register model parameters, update the moving averages, and retrieve the state dictionary of the moving averages.
+
 import torch
 
 class EMA:
