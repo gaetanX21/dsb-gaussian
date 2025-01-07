@@ -55,4 +55,6 @@ To distribute training across several SSH hosts to run sweeps of experiments, fo
 - `models.py`: Defines the Cached Diffusion Schrödinger Bridge (DSB) model as proposed by De Bortoli et al.
 - `monitor.py`: Monitors the progress of experiments in a specified sweep directory.
 - `utils.py`: Provides utility functions for visualizing the Diffusion Schrödinger Bridge (DSB) model.
+- the `animations/` directory contains MP4 animations of the DSB model in action, generated using the `utils.animation_bridge` function.
 - the `assets/` directory contains images and other assets used in the README.
+- the `report/` directory contains PDF file of the report.
