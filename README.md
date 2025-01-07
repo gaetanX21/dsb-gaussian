@@ -1,6 +1,6 @@
 # Study of Diffusion Schrödinger Bridge model in Gaussian case
 
-<img src="results/troll2torch.png" alt="DSB example in 2D" width=75% style="display: block; margin: 0 auto"/>
+<img src="assets/troll2torch.png" alt="DSB example in 2D" width=75% style="display: block; margin: 0 auto"/>
 <p style="text-align: center; font-style: italic">SB between two 2D distributions after L = 20 DSB iterations. The upper half is the forward process and the lower half is the reverse process. The x axis accounts for the time steps k.</p>
 <br>
 
