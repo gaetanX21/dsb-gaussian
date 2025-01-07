@@ -30,3 +30,15 @@ To distribute training across several SSH hosts:
 2. Distribute your tasks to your SSH hosts using ```python distribute.py sweep_dir```.
 3. Monitor progress in real-time using ```python monitor.py sweep_dir``` in another window.
 
+
+## File structure
+- `argloader.py`: Defines a function `get_args` that uses the argparse library to parse command-line arguments for training the Diffusion Schrödinger Bridge (DSB) model.
+- `config.py`: Defines a function `save_config` that saves the configuration of the DSB model training process to a YAML file.
+- `data.py`: Defines various classes and functions for data sampling and loading, specifically for the DSB model.
+- `distribute.py`: Distributes tasks for running experiments on multiple hosts using the Fabric library.
+- `ema.py`: Defines a class `EMA` (Exponential Moving Average) for maintaining a moving average of model parameters.
+- `logloader.py`: Sets up a logging system with both console and file handlers.
+- `main.py`: Serves as the entry point for training the DSB model, parsing command-line arguments, setting up logging, and initializing the training process.
+- `models.py`: Defines the Cached Diffusion Schrödinger Bridge (DSB) model as proposed by De Bortoli et al.
+- `monitor.py`: Monitors the progress of experiments in a specified sweep directory.
+- `utils.py`: Provides utility functions for visualizing the Diffusion Schrödinger Bridge (DSB) model.
